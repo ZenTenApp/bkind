@@ -27,6 +27,8 @@ import (
 
 // ServeHTTP implements http.Handler interface.
 func (rl *Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rl.ensureExpirationManager()
+
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{
@@ -214,9 +216,11 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					var writeErr error
 					var skipBroadcast bool
 
-					if env.Event.Kind == 5 {
-						// this always returns "blocked: " whenever it returns an error
-						writeErr = srl.handleDeleteRequest(ctx, &env.Event)
+					// run the write policies before any kind-specific side effect:
+					// an invalid kind 5 or kind 62 must not be able to touch the store.
+					writeErr = srl.checkEventAcceptable(ctx, &env.Event)
+					if writeErr == nil {
+						writeErr = srl.handleKindSpecificSideEffects(ctx, &env.Event)
 					}
 
 					if writeErr == nil {
@@ -293,6 +297,16 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					// a context just for the "stored events" request handler
 					reqCtx, cancelReqCtx := context.WithCancelCause(ctx)
 
+					// the cancel function is handed over to the listeners once they are
+					// registered; until then it must be called, otherwise a rejected
+					// filter would leak this context.
+					transferred := false
+					defer func() {
+						if !transferred {
+							cancelReqCtx(errors.New("subscription setup aborted"))
+						}
+					}()
+
 					// expose subscription id in the context
 					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
 
@@ -315,6 +329,10 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 						} else {
 							rl.addListener(ws, env.SubscriptionID, srl, filter, cancelReqCtx)
 						}
+					}
+
+					if len(env.Filters) > 0 {
+						transferred = true
 					}
 
 					go func() {

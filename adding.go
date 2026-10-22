@@ -9,10 +9,53 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
+// checkEventAcceptable runs every write policy (RejectEvent) against an event.
+//
+// This is separate from handleNormal so that callers can run the policies before
+// the kind-specific side effects: kind 5 deletions and kind 62 vanish requests act
+// on the store and must never run for an event that would be rejected afterwards.
+// Policies are only run once per event, otherwise stateful ones (the rate
+// limiters) would count the same event twice.
+func (rl *Relay) checkEventAcceptable(ctx context.Context, evt *nostr.Event) error {
+	for _, reject := range rl.RejectEvent {
+		if reject, msg := reject(ctx, evt); reject {
+			if msg == "" {
+				return errors.New("blocked: no reason")
+			} else {
+				return errors.New(nostr.NormalizeOKMessage(msg, "blocked"))
+			}
+		}
+	}
+	return nil
+}
+
+// handleKindSpecificSideEffects applies the store mutations implied by an event
+// kind before the event itself is stored: NIP-09 deletions and NIP-62 vanish
+// requests. It must only be called after checkEventAcceptable.
+func (rl *Relay) handleKindSpecificSideEffects(ctx context.Context, evt *nostr.Event) error {
+	switch evt.Kind {
+	case 5:
+		return rl.handleDeleteRequest(ctx, evt)
+	case 62:
+		return rl.handleVanishRequest(ctx, evt)
+	}
+	return nil
+}
+
 // AddEvent sends an event through then normal add pipeline, as if it was received from a websocket.
 func (rl *Relay) AddEvent(ctx context.Context, evt *nostr.Event) (skipBroadcast bool, writeError error) {
+	rl.ensureExpirationManager()
+
 	if evt == nil {
 		return false, errors.New("error: event is nil")
+	}
+
+	if err := rl.checkEventAcceptable(ctx, evt); err != nil {
+		return true, err
+	}
+
+	if err := rl.handleKindSpecificSideEffects(ctx, evt); err != nil {
+		return true, err
 	}
 
 	if nostr.IsEphemeralKind(evt.Kind) {
@@ -23,21 +66,23 @@ func (rl *Relay) AddEvent(ctx context.Context, evt *nostr.Event) (skipBroadcast 
 }
 
 func (rl *Relay) handleNormal(ctx context.Context, evt *nostr.Event) (skipBroadcast bool, writeError error) {
-	for _, reject := range rl.RejectEvent {
-		if reject, msg := reject(ctx, evt); reject {
-			if msg == "" {
-				return true, errors.New("blocked: no reason")
-			} else {
-				return true, errors.New(nostr.NormalizeOKMessage(msg, "blocked"))
-			}
-		}
+	// a stored NIP-62 request means the author asked us to erase them and stop
+	// accepting their events: refuse anything they dated before that request.
+	if err := rl.checkVanished(ctx, evt); err != nil {
+		return true, err
 	}
 
-	// Check to see if the event has been deleted by ID
+	// Check to see if the event has been deleted by ID. The query is scoped to the
+	// event author: without that, anyone could permanently block any event id by
+	// publishing a kind 5 that merely references it.
+	//
+	// The tag name is the bare "e": go-nostr matches filter tag names verbatim
+	// ("#e" is only the JSON spelling used on the wire).
 	for _, query := range rl.QueryEvents {
 		ch, err := query(ctx, nostr.Filter{
-			Kinds: []int{5},
-			Tags:  nostr.TagMap{"#e": []string{evt.ID}},
+			Kinds:   []int{5},
+			Authors: []string{evt.PubKey},
+			Tags:    nostr.TagMap{"e": []string{evt.ID}},
 		})
 		if err != nil {
 			continue
@@ -68,7 +113,7 @@ func (rl *Relay) handleNormal(ctx context.Context, evt *nostr.Event) (skipBroadc
 		for _, query := range rl.QueryEvents {
 			dTagValue := ""
 			for _, tag := range evt.Tags {
-				if len(tag) > 0 && tag[0] == "d" {
+				if len(tag) > 1 && tag[0] == "d" {
 					dTagValue = tag[1]
 					break
 				}
@@ -76,9 +121,10 @@ func (rl *Relay) handleNormal(ctx context.Context, evt *nostr.Event) (skipBroadc
 
 			address := fmt.Sprintf("%d:%s:%s", evt.Kind, evt.PubKey, dTagValue)
 			ch, err := query(ctx, nostr.Filter{
-				Kinds: []int{5},
-				Since: &evt.CreatedAt,
-				Tags:  nostr.TagMap{"#a": []string{address}},
+				Kinds:   []int{5},
+				Authors: []string{evt.PubKey},
+				Since:   &evt.CreatedAt,
+				Tags:    nostr.TagMap{"a": []string{address}},
 			})
 			if err != nil {
 				continue

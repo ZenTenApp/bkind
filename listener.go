@@ -134,9 +134,16 @@ func (rl *Relay) removeClientAndListeners(ws *WebSocket) {
 
 // returns how many listeners were notified
 func (rl *Relay) notifyListeners(event *nostr.Event) int {
+	// take a copy: listeners can be added and removed from other goroutines while
+	// this one writes to them, and writing to a slow client must not hold the lock
+	rl.clientsMutex.Lock()
+	listeners := make([]listener, len(rl.listeners))
+	copy(listeners, rl.listeners)
+	rl.clientsMutex.Unlock()
+
 	count := 0
 listenersloop:
-	for _, listener := range rl.listeners {
+	for _, listener := range listeners {
 		if listener.filter.Matches(event) {
 			for _, pb := range rl.PreventBroadcast {
 				if pb(listener.ws, event) {

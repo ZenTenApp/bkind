@@ -17,8 +17,6 @@ import (
 )
 
 func NewRelay() *Relay {
-	ctx := context.Background()
-
 	rl := &Relay{
 		Log: log.New(os.Stderr, "[khatru-relay] ", log.LstdFlags),
 
@@ -46,7 +44,6 @@ func NewRelay() *Relay {
 	}
 
 	rl.expirationManager = newExpirationManager(rl)
-	go rl.expirationManager.start(ctx)
 
 	return rl
 }
@@ -115,7 +112,27 @@ type Relay struct {
 	MaxMessageSize int64         // Maximum message size allowed from peer.
 
 	// NIP-40 expiration manager
-	expirationManager *expirationManager
+	expirationManager      *expirationManager
+	expirationManagerStart sync.Once
+}
+
+// ensureExpirationManager starts the NIP-40 sweeper once, the first time the relay
+// is actually used. Doing it here instead of in NewRelay means the initial scan
+// always sees a fully configured relay: stores and hooks are wired after the
+// constructor returns.
+func (rl *Relay) ensureExpirationManager() {
+	rl.expirationManagerStart.Do(func() {
+		go rl.expirationManager.start(context.Background())
+	})
+}
+
+// SetExpirationInterval controls how often expired events are swept from the
+// store. It is safe to call at any time, but a very short interval combined with a
+// slow store will keep the sweep running continuously. The default is one hour.
+func (rl *Relay) SetExpirationInterval(d time.Duration) {
+	if d > 0 {
+		rl.expirationManager.interval.Store(int64(d))
+	}
 }
 
 func (rl *Relay) getBaseURL(r *http.Request) string {

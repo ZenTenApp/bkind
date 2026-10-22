@@ -277,7 +277,7 @@ func TestBasicRelayFunctionality(t *testing.T) {
 
 		// create a new relay with shorter expiration check interval
 		relay := NewRelay()
-		relay.expirationManager.interval = 3 * time.Second // check every 3 seconds
+		relay.SetExpirationInterval(3 * time.Second) // check every 3 seconds
 		store := slicestore.SliceStore{}
 		store.Init()
 		relay.StoreEvent = append(relay.StoreEvent, store.SaveEvent)

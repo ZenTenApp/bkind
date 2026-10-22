@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -34,36 +35,45 @@ func (h *expiringEventHeap) Pop() interface{} {
 }
 
 type expirationManager struct {
-	events          expiringEventHeap
-	mu              sync.Mutex
-	relay           *Relay
-	interval        time.Duration
-	initialScanDone bool
+	events   expiringEventHeap
+	mu       sync.Mutex
+	relay    *Relay
+	interval atomic.Int64 // nanoseconds
 }
 
 func newExpirationManager(relay *Relay) *expirationManager {
-	return &expirationManager{
-		events:   make(expiringEventHeap, 0),
-		relay:    relay,
-		interval: time.Hour,
+	em := &expirationManager{
+		events: make(expiringEventHeap, 0),
+		relay:  relay,
 	}
+	em.interval.Store(int64(time.Hour))
+	return em
+}
+
+// getInterval returns how often expired events are swept.
+func (em *expirationManager) getInterval() time.Duration {
+	if d := time.Duration(em.interval.Load()); d > 0 {
+		return d
+	}
+	return time.Hour
 }
 
 func (em *expirationManager) start(ctx context.Context) {
-	ticker := time.NewTicker(em.interval)
-	defer ticker.Stop()
+	// scan and sweep before the first tick: otherwise, after a restart,
+	// already-expired events stay readable for a whole interval
+	em.initialScan(ctx)
+	em.checkExpiredEvents(ctx)
+
+	timer := time.NewTimer(em.getInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if !em.initialScanDone {
-				em.initialScan(ctx)
-				em.initialScanDone = true
-			}
-
+		case <-timer.C:
 			em.checkExpiredEvents(ctx)
+			timer.Reset(em.getInterval())
 		}
 	}
 }
@@ -73,20 +83,21 @@ func (em *expirationManager) initialScan(ctx context.Context) {
 	defer em.mu.Unlock()
 
 	// query all events
-	ctx = context.WithValue(ctx, internalCallKey, struct{}{})
+	ctx = WithInternalCall(ctx)
 	for _, query := range em.relay.QueryEvents {
-		ch, err := query(ctx, nostr.Filter{})
+		err := forEachEventPage(ctx, query, nostr.Filter{}, func(batch []*nostr.Event) error {
+			for _, evt := range batch {
+				if expiresAt := nip40.GetExpiration(evt.Tags); expiresAt != -1 {
+					heap.Push(&em.events, expiringEvent{
+						id:        evt.ID,
+						expiresAt: expiresAt,
+					})
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			continue
-		}
-
-		for evt := range ch {
-			if expiresAt := nip40.GetExpiration(evt.Tags); expiresAt != -1 {
-				heap.Push(&em.events, expiringEvent{
-					id:        evt.ID,
-					expiresAt: expiresAt,
-				})
-			}
 		}
 	}
 
@@ -108,7 +119,7 @@ func (em *expirationManager) checkExpiredEvents(ctx context.Context) {
 
 		heap.Pop(&em.events)
 
-		ctx := context.WithValue(ctx, internalCallKey, struct{}{})
+		ctx := WithInternalCall(ctx)
 		for _, query := range em.relay.QueryEvents {
 			ch, err := query(ctx, nostr.Filter{IDs: []string{next.id}})
 			if err != nil {
