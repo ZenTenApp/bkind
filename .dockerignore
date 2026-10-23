@@ -1,0 +1,16 @@
+# The image only needs the module and the relay source; everything else just
+# invalidates the layer cache.
+.git
+.github
+.pi
+docs
+*.md
+*.env
+!*.env.example
+
+# only this example is built
+examples/*
+!examples/bkind
+
+# test-only sources
+*_test.go

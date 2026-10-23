@@ -1,0 +1,89 @@
+# B kind relay: the DM-only relay from this directory.
+#
+#   docker compose up -d --build                 # relay on 127.0.0.1:3334
+#   docker compose --profile tls up -d --build    # plus Caddy on :80/:443
+#
+# Copy .env.example to .env first, or pass the settings as environment variables.
+
+name: bkind
+
+services:
+  bkind:
+    build:
+      # the Dockerfile lives next to this file, but the build needs the module root
+      context: ../..
+      dockerfile: examples/bkind/Dockerfile
+    image: bkind:local
+    restart: unless-stopped
+
+    environment:
+      # must be the exact URL clients connect to: NIP-42 auth events and NIP-62
+      # vanish requests are both compared against it
+      BKIND_URL: ${BKIND_URL:-ws://127.0.0.1:3334}
+      BKIND_ADDR: ":3334"
+      BKIND_DB: /data
+      BKIND_SWEEP_INTERVAL: ${BKIND_SWEEP_INTERVAL:-5m}
+      BKIND_MAX_EXPIRATION: ${BKIND_MAX_EXPIRATION:-75h}
+      BKIND_MAX_CONTENT: ${BKIND_MAX_CONTENT:-4096}
+      BKIND_MAX_TAGS: ${BKIND_MAX_TAGS:-16}
+
+    # loopback only: TLS and the public port belong to Caddy (see the tls profile)
+    ports:
+      - "127.0.0.1:${BKIND_PORT:-3334}:3334"
+
+    # a fresh named volume inherits /data's ownership (65534) from the image, so no
+    # chown is needed. A bind mount instead would arrive root-owned: see the
+    # deployment guide before switching to one.
+    #
+    # badger also takes a LOCK inside this volume, so the service must stay a
+    # single process: never `docker compose up --scale bkind=2`.
+    volumes:
+      - bkind-data:/data
+
+    # nothing outside /data is written by the relay
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # the relay stops accepting on SIGTERM and drains for up to 15s before closing
+    # the store, so give it more than the 10s default
+    stop_grace_period: 30s
+
+    # no healthcheck on purpose: the runtime image is scratch, so it has neither a
+    # shell nor curl. Probe from the host instead:
+    #   curl -sS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/ | jq .
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      - bkind
+
+    environment:
+      BKIND_DOMAIN: ${BKIND_DOMAIN:?set BKIND_DOMAIN to the domain clients connect to}
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  bkind-data:
+  caddy-data:
+  caddy-config:

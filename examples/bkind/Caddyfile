@@ -1,0 +1,24 @@
+# Terminates TLS for the bkind container and proxies websockets to it.
+# Only used by the "tls" compose profile; the domain comes from BKIND_DOMAIN.
+
+# Optional global options, for example an ACME account email. Uncomment and edit,
+# but do not leave "email" without a value: Caddy refuses to start.
+# {
+# 	email you@example.com
+# }
+
+{$BKIND_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy bkind:3334 {
+		# overwrite instead of append: the relay takes the first public address in
+		# X-Forwarded-For, so a client-supplied value must never reach it
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
