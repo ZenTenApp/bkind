@@ -1,4 +1,4 @@
-// A relay that only serves NIP-04 direct messages: kind 4, plus the two utility
+// A relay that only serves NIP-04 direct messages: Kind 4, plus the two utility
 // kinds needed to make a message deletable (NIP-09) and to erase an identity
 // (NIP-62). Everything is authenticated, everything expires, and a message is only
 // ever readable by its author and its recipient.
@@ -220,7 +220,7 @@ func newRelay(cfg config) (*khatru.Relay, func(), error) {
 	)
 
 	// live delivery does not re-run the filter policies, so a wide subscription
-	// would otherwise receive kind 4 events for the life of the connection
+	// would otherwise receive Kind 4 events for the life of the connection
 	relay.PreventBroadcast = append(relay.PreventBroadcast, policies.DMBroadcastGuard)
 
 	relay.RejectConnection = append(relay.RejectConnection,
@@ -228,8 +228,8 @@ func newRelay(cfg config) (*khatru.Relay, func(), error) {
 	)
 
 	// --------------------------------------------------------------- NIP-11
-	relay.Info.Name = "B kind relay"
-	relay.Info.Description = "kind 4 direct messages only. Authenticated, ephemeral (max 75h), size-limited."
+	relay.Info.Name = "B Kind"
+	relay.Info.Description = "Kind 4 direct messages only. Authenticated, ephemeral (max 75h), size-limited."
 	relay.Info.SupportedNIPs = []any{4, 9, 11, 40, 42, 62}
 	relay.Info.Limitation = &nip11.RelayLimitationDocument{
 		MaxMessageLength: maxMessageBytes,

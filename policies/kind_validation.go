@@ -15,7 +15,7 @@ func ValidateKind(ctx context.Context, evt *nostr.Event) (bool, string) {
 		}
 		json.Unmarshal([]byte(evt.Content), &m)
 		if m.Name == "" {
-			return true, "missing json name in kind 0"
+			return true, "missing json name in Kind 0"
 		}
 	case 1:
 		return false, ""

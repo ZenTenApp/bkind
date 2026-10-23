@@ -12,7 +12,7 @@ import (
 // checkEventAcceptable runs every write policy (RejectEvent) against an event.
 //
 // This is separate from handleNormal so that callers can run the policies before
-// the kind-specific side effects: kind 5 deletions and kind 62 vanish requests act
+// the kind-specific side effects: Kind 5 deletions and Kind 62 vanish requests act
 // on the store and must never run for an event that would be rejected afterwards.
 // Policies are only run once per event, otherwise stateful ones (the rate
 // limiters) would count the same event twice.
@@ -74,7 +74,7 @@ func (rl *Relay) handleNormal(ctx context.Context, evt *nostr.Event) (skipBroadc
 
 	// Check to see if the event has been deleted by ID. The query is scoped to the
 	// event author: without that, anyone could permanently block any event id by
-	// publishing a kind 5 that merely references it.
+	// publishing a Kind 5 that merely references it.
 	//
 	// The tag name is the bare "e": go-nostr matches filter tag names verbatim
 	// ("#e" is only the JSON spelling used on the wire).

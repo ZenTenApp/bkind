@@ -11,7 +11,7 @@ import (
 )
 
 // DMKindAllowlist is the set of kinds served by a relay that only exists to carry
-// NIP-04 direct messages: kind 4 itself, NIP-09 deletions and NIP-62 vanish
+// NIP-04 direct messages: Kind 4 itself, NIP-09 deletions and NIP-62 vanish
 // requests, both of which are needed to make a DM deletable.
 var DMKindAllowlist = []uint16{4, 5, 62}
 
@@ -19,7 +19,7 @@ var DMKindAllowlist = []uint16{4, 5, 62}
 //
 // Every kind it serves is private, so nothing here is a "public filter" case:
 //
-//   - kind 4 is readable by its author and by its "p" recipient, so a filter must
+//   - Kind 4 is readable by its author and by its "p" recipient, so a filter must
 //     pin either the authors or the "#p" tags to the authenticated pubkey;
 //   - kinds 5 and 62 are readable by their author only, so a filter that can match
 //     them must pin the authors to the authenticated pubkey.
@@ -72,7 +72,7 @@ func DMReadPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
 
 	if matchesDM {
 		if !sendersPinned && !receiversPinned {
-			return true, "restricted: kind 4 events are only visible to their author and their recipient, pin \"authors\" or \"#p\" to your own pubkey"
+			return true, "restricted: Kind 4 events are only visible to their author and their recipient, pin \"authors\" or \"#p\" to your own pubkey"
 		}
 		return false, ""
 	}
@@ -90,7 +90,7 @@ func DMCountPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
 //
 // Live delivery does not go through the filter policies (a subscription's filter is
 // stored at REQ time and matched with Filter.Matches), so without this a wide
-// subscription would keep receiving kind 4 events for the life of the connection,
+// subscription would keep receiving Kind 4 events for the life of the connection,
 // even though its REQ was rejected. It returns true to prevent the event from being
 // written to that connection.
 func DMBroadcastGuard(ws *khatru.WebSocket, evt *nostr.Event) bool {
@@ -263,19 +263,19 @@ func ValidateKind4Shape(ctx context.Context, evt *nostr.Event) (bool, string) {
 				return true, `invalid: "p" tag must be a 64-character hex pubkey`
 			}
 			if tag[1] == evt.PubKey {
-				return true, `invalid: a kind 4 event cannot be addressed to its own author`
+				return true, `invalid: a Kind 4 event cannot be addressed to its own author`
 			}
 			recipients++
 		case "e", "a", "d":
-			return true, fmt.Sprintf("invalid: kind 4 events must not carry %q tags", tag[0])
+			return true, fmt.Sprintf("invalid: Kind 4 events must not carry %q tags", tag[0])
 		}
 	}
 
 	if recipients != 1 {
-		return true, `invalid: kind 4 events must have exactly one "p" tag`
+		return true, `invalid: Kind 4 events must have exactly one "p" tag`
 	}
 	if evt.Content == "" {
-		return true, "invalid: kind 4 events must have encrypted content"
+		return true, "invalid: Kind 4 events must have encrypted content"
 	}
 
 	return false, ""
@@ -304,12 +304,12 @@ func ValidateKind5Shape(ctx context.Context, evt *nostr.Event) (bool, string) {
 		case "client", "expiration":
 			// required utility tags
 		default:
-			return true, fmt.Sprintf("invalid: kind 5 events must not carry %q tags on this relay", tag[0])
+			return true, fmt.Sprintf("invalid: Kind 5 events must not carry %q tags on this relay", tag[0])
 		}
 	}
 
 	if targets == 0 {
-		return true, `invalid: kind 5 events must reference at least one event with an "e" tag`
+		return true, `invalid: Kind 5 events must reference at least one event with an "e" tag`
 	}
 
 	return false, ""
@@ -336,7 +336,7 @@ func ValidateKind62Shape(ctx context.Context, evt *nostr.Event) (bool, string) {
 		case "client", "expiration":
 			// required utility tags
 		default:
-			return true, fmt.Sprintf("invalid: kind 62 events must not carry %q tags on this relay", tag[0])
+			return true, fmt.Sprintf("invalid: Kind 62 events must not carry %q tags on this relay", tag[0])
 		}
 	}
 

@@ -23,7 +23,7 @@ func main () {
 
 func handleWeatherQuery(ctx context.Context, filter nostr.Filter) (ch chan *nostr.Event, err error) {
 	if filter.Kind != 10774 {
-		// this function only handles kind 10774, if the query is for something else we return
+		// this function only handles Kind 10774, if the query is for something else we return
 		// a nil channel, which corresponds to no results
 		return nil, nil
 	}

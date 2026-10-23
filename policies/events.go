@@ -81,7 +81,7 @@ func RestrictToSpecifiedKinds(allowEphemeral bool, kinds ...uint16) func(context
 			return false, ""
 		}
 
-		return true, fmt.Sprintf("received event kind %d not allowed", event.Kind)
+		return true, fmt.Sprintf("Kind %d events are not allowed on this relay", event.Kind)
 	}
 }
 

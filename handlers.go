@@ -217,7 +217,7 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					var skipBroadcast bool
 
 					// run the write policies before any kind-specific side effect:
-					// an invalid kind 5 or kind 62 must not be able to touch the store.
+					// an invalid Kind 5 or Kind 62 must not be able to touch the store.
 					writeErr = srl.checkEventAcceptable(ctx, &env.Event)
 					if writeErr == nil {
 						writeErr = srl.handleKindSpecificSideEffects(ctx, &env.Event)

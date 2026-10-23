@@ -4,7 +4,7 @@ outline: deep
 
 # Deploying with Docker
 
-A runbook for putting the [kind-4 DM relay](./dm-only-relay.md) on a fresh Ubuntu
+A runbook for putting the [Kind-4 DM relay](./dm-only-relay.md) on a fresh Ubuntu
 server with the files in `examples/bkind/`: a `scratch` image, a compose file, and
 an optional Caddy service that terminates TLS.
 
@@ -187,7 +187,7 @@ nak req -k 4 -t p="$BPUB" --sec "$BOB" --auth "$RELAY"
 
 # 4. an outsider is refused
 nak req -k 4 -a "$APUB" --sec "$(nak key generate)" --auth "$RELAY"
-# -> CLOSED: restricted: kind 4 events are only visible to their author and their
+# -> CLOSED: restricted: Kind 4 events are only visible to their author and their
 #    recipient, pin "authors" or "#p" to your own pubkey
 ```
 
@@ -250,7 +250,7 @@ sudo docker compose up -d --build
 | `BKIND_DOMAIN` error on `up` | the `tls` profile is active and the variable is unset |
 | Caddy logs ACME failures | DNS not resolving yet, or a stale `AAAA`; fix DNS and `docker compose restart caddy` |
 | `failed to open the database ... lock` | a second container on the same volume; never `--scale bkind=2` |
-| Client closes with websocket code 1009 | the frame exceeded `max_message_length` (12KB); kind 4 content is capped at 4KB, so this is usually something that is not a DM |
+| Client closes with websocket code 1009 | the frame exceeded `max_message_length` (12KB); Kind 4 content is capped at 4KB, so this is usually something that is not a DM |
 | `docker compose` cannot find `.env` or `./Caddyfile` | run it from `examples/bkind`; relative paths resolve against the compose file's directory |
 | Events gone after a restart | relay started without `BKIND_DB=/data`, or the volume was removed (`docker compose down -v` deletes it) |
 | `docker compose exec bkind sh` fails | expected: the runtime image is `scratch` and has no shell. Read the logs instead |

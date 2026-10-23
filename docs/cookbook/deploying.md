@@ -6,7 +6,7 @@ outline: deep
 
 A relay is a long-running websocket server, so the pieces are the usual ones: a
 systemd unit, a TLS-terminating reverse proxy, and a persistent event store. This
-page uses the [kind-4 DM relay](./dm-only-relay.md) as the example workload, but
+page uses the [Kind-4 DM relay](./dm-only-relay.md) as the example workload, but
 the service/proxy setup applies to any khatru relay.
 
 The end state:
@@ -143,7 +143,7 @@ events/hour and 200/day per npub, 200/hour and 800/day per ip for reads.
 
 ```ini
 [Unit]
-Description=B kind relay (kind 4 direct messages)
+Description=B Kind relay (Kind 4 direct messages)
 Documentation=https://github.com/fiatjaf/khatru/blob/master/docs/cookbook/dm-only-relay.md
 After=network-online.target
 Wants=network-online.target
@@ -361,7 +361,7 @@ nak req -k 4 -t p="$BPUB" --sec "$BOB" --auth "$RELAY"
 # 5. a third party is refused
 CAROL=$(nak key generate)
 nak req -k 4 -a "$APUB" --sec "$CAROL" --auth "$RELAY"
-# -> CLOSED: restricted: kind 4 events are only visible to their author and
+# -> CLOSED: restricted: Kind 4 events are only visible to their author and
 #    their recipient, pin "authors" or "#p" to your own pubkey
 ```
 
@@ -423,7 +423,7 @@ Scale up, not out.
 | Symptom | Cause |
 |---|---|
 | `auth-required` forever, even with `--auth` | `BKIND_URL` does not match the URL the client uses (scheme, host, trailing path) |
-| Client sees `restricted: kind 4 events are only visible...` | the client's filter does not pin `authors` or `#p` to its own pubkey |
+| Client sees `restricted: Kind 4 events are only visible...` | the client's filter does not pin `authors` or `#p` to its own pubkey |
 | Connection closes with code 1009 | the frame exceeded `MaxMessageSize` (12KB); content is capped at 4KB, so this is usually a client sending something else |
 | `failed to open the database ... lock` | another `bkind` process already has the directory open |
 | Service starts then exits `status=1` | run `/usr/local/bin/bkind` by hand with the same environment file to see the error |

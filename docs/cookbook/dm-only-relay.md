@@ -2,7 +2,7 @@
 outline: deep
 ---
 
-# "B Kind": a kind-4-only DM relay
+# B Kind: a Kind-4-only DM relay
 
 A relay that serves NIP-04 direct messages and the two utility kinds needed to
 operate them, and nothing else. Everything is authenticated, everything expires,
@@ -25,7 +25,7 @@ Status: implemented on branch `complex/bkind`.
 | Expiration | mandatory, exactly one tag, `now < expiration <= now + 75h` |
 | Client tag | mandatory, exactly one, non-empty value |
 | Authentication | NIP-42 on writes and reads; write author must equal authed key |
-| Privacy | kind 4 visible to author and `p` recipient only |
+| Privacy | Kind 4 visible to author and `p` recipient only |
 | Tags | max 16 tags, tag name max 64 bytes, tag value max 256 bytes |
 | Kind 4 shape | exactly one `p`, 64-char hex, not the author, no `e`/`a`/`d` |
 | Kind 5 | `e` tags only, every target must be authored by the sender |
@@ -48,8 +48,8 @@ is **not** used (its 2-per-3-minutes event limit contradicts our numbers).
    either: gift wrap is signed by a throwaway key, so "authed key equals author"
    can never hold, and it would defeat the size and tag rules.
 3. **Kind 5 and 62 are stored, but only when authorized.** Both are broadcast.
-   Reading them is restricted to their author: a stored kind 5 lists the IDs of
-   the sender's messages, and a stored kind 62 is a durable request. Storing kind
+   Reading them is restricted to their author: a stored Kind 5 lists the IDs of
+   the sender's messages, and a stored Kind 62 is a durable request. Storing kind
    62 is what makes "stop accepting events from this key" survive a restart.
 4. **Deletion is author-only.** No `OverwriteDeletionOutcome`. A recipient cannot
    destroy the sender's copy; clients should delete locally.
@@ -65,21 +65,21 @@ kind of relay, not a preference.
 ### The write gate now runs before kind-specific side effects
 
 `handlers.go` used to run `handleDeleteRequest` before `handleNormal` applied
-`RejectEvent`. An oversize, tag-less, unauthenticated or already-expired kind 5
+`RejectEvent`. An oversize, tag-less, unauthenticated or already-expired Kind 5
 therefore performed its deletion and was only afterwards rejected with
-`blocked: received event kind 5 not allowed`.
+`blocked: Kind 5 events are not allowed on this relay`.
 
 The write policy loop is now `checkEventAcceptable(ctx, evt)`, called by both the
 websocket handler and `Relay.AddEvent` before `handleKindSpecificSideEffects`,
-which dispatches kind 5 to `handleDeleteRequest` and kind 62 to
+which dispatches Kind 5 to `handleDeleteRequest` and Kind 62 to
 `handleVanishRequest`. Policies run exactly once per event, so stateful ones (the
 rate limiters) do not count the same event twice.
 
 ### Stored deletions are no longer a censorship vector
 
-`adding.go` blocks a re-published event by querying stored kind 5 events for
-`e = evt.ID` without an author filter. Once kind 5 is persisted, anyone could
-permanently block any event ID on the relay with a kind 5 that merely references
+`adding.go` blocks a re-published event by querying stored Kind 5 events for
+`e = evt.ID` without an author filter. Once Kind 5 is persisted, anyone could
+permanently block any event ID on the relay with a Kind 5 that merely references
 it, even though `deleting.go` correctly declines to delete events they do not
 own.
 
@@ -88,7 +88,7 @@ Both halves are fixed:
 1. Only authorized deletions are stored: `e` targets that the sender does not
    author are skipped, and the whole event is rejected when no target survives.
 2. The deleted-by-ID query carries `Authors: []string{evt.PubKey}`, so even a
-   stored kind 5 cannot block someone else's event.
+   stored Kind 5 cannot block someone else's event.
 
 The same scoping applies to the replaceable-by-address tombstone query.
 
@@ -103,13 +103,13 @@ could be re-published anyway. The internal queries now use `"e"` and `"a"`.
 
 ### Privacy had two live bypasses
 
-`policies/nip04.go` returns early when the filter does not contain kind 4, so a
+`policies/nip04.go` returns early when the filter does not contain Kind 4, so a
 filter with **empty `Kinds`** queried every kind and never triggered the auth
 check.
 
 `notifyListeners` matched the filter stored at subscription time and never
 re-ran `RejectFilter`. That stored filter is the pre-`OverwriteFilter` copy, so a
-wide live subscription kept receiving kind-4 events regardless of the check done
+wide live subscription kept receiving Kind-4 events regardless of the check done
 at REQ time.
 
 Fixed with a deny-by-default read policy that treats empty `Kinds` as "all kinds"
@@ -127,7 +127,7 @@ store.
 Non-authored targets are now skipped silently and the event is accepted if at
 least one target was actionable. When nothing could be acted on the whole deletion
 is rejected with `blocked: no valid deletion targets` so that nothing is stored
-and other relays cannot mistake a stored kind 5 for evidence that the target
+and other relays cannot mistake a stored Kind 5 for evidence that the target
 existed here. `OverwriteDeletionOutcome` can still widen acceptance for someone
 else's event; it is not consulted for the author's own targets.
 
@@ -189,7 +189,7 @@ websocket.
   empty `Kinds` counts as "every kind", the strictest case; kinds 4 needs
   `authors` or `p` pinned to the authed key; 5 and 62 need `authors == [authed]`.
 - `DMCountPolicy` — the same rule for `RejectCountFilter`.
-- `DMBroadcastGuard` — `PreventBroadcast`: kind 4 to its author or its `p`, 5 and
+- `DMBroadcastGuard` — `PreventBroadcast`: Kind 4 to its author or its `p`, 5 and
   62 to their author only, anything else never.
 - `RequireAuthedAuthor` — `auth-required:` when unauthenticated (which is what
   triggers the NIP-42 challenge), `blocked:` when the authed key is not the
@@ -232,7 +232,7 @@ ip.
 - `bkind_test.go` wires the example's policy set and drives it over a real
   websocket: the NIP-42 challenge round trip, authorship binding, the whole
   `RejectEvent` table (kind, content size, expiration, client tag, tag shape,
-  kind 4 structure), the read matrix (author, recipient, third party,
+  Kind 4 structure), the read matrix (author, recipient, third party,
   unauthenticated), live delivery to the recipient only, deletion by author vs
   third party (including the re-publish attempt), the vanish request (foreign
   relay tag, erasure, refusing older events, missing `DeleteEvent`), NIP-11, and
@@ -253,13 +253,13 @@ variables (`-url`, `-addr`, `-db`, `-sweep-interval`, `-max-expiration`,
 
 ## Accepted consequences
 
-- **Kind 5 and 62 read as author-only**, unlike kind 4 which is author-or-recipient.
-- **Deletion is not durable past expiration.** A kind 5 self-prunes after at most
+- **Kind 5 and 62 read as author-only**, unlike Kind 4 which is author-or-recipient.
+- **Deletion is not durable past expiration.** A Kind 5 self-prunes after at most
   75 hours; after the sweep the sender, who still holds the original, can
   re-publish it. Deletion is author-only, so this is not a new trust problem. If
-  "delete means gone" is required, a kind 5's expiration must be at least that of
+  "delete means gone" is required, a Kind 5's expiration must be at least that of
   its targets.
-- **Kind 62 blocks re-publication for the life of the stored kind 62**, that is,
+- **Kind 62 blocks re-publication for the life of the stored Kind 62**, that is,
   up to 75 hours after it was sent.
 - **Expiration is enforced from the sweep and the read wrapper**, so a client that
   reads through a different query path (for example `COUNT` on its own events) may

@@ -16,7 +16,7 @@ import (
 // are not the author of this event" would turn the relay into an existence oracle
 // for any event id in the store. When no target at all could be acted on, the
 // deletion is rejected so that nothing is stored and no other relay can mistake a
-// stored kind 5 for evidence that the referenced event existed here.
+// stored Kind 5 for evidence that the referenced event existed here.
 func (rl *Relay) handleDeleteRequest(ctx context.Context, evt *nostr.Event) error {
 	authorized := 0
 	seen := make(map[string]struct{}, len(evt.Tags))

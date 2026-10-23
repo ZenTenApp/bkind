@@ -67,7 +67,7 @@ But that will duplicate events on both and then return duplicated events on each
 
 You can do a kind of sharding, for example, by storing some events in one store and others in another:
 
-For example, maybe you want kind 1 events in `db1` and kind 30023 events in `db30023`:
+For example, maybe you want Kind 1 events in `db1` and Kind 30023 events in `db30023`:
 
 ```go
 	relay.StoreEvent = append(relay.StoreEvent, func (ctx context.Context, evt *nostr.Event) error {
