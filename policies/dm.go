@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -28,7 +28,7 @@ var DMKindAllowlist = []uint16{4, 5, 62}
 // filter asking for a kind outside the allowlist is rejected instead of being
 // silently narrowed, so clients notice that they are talking to the wrong relay.
 func DMReadPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
-	authed := khatru.GetAuthed(ctx)
+	authed := bkind.GetAuthed(ctx)
 	if authed == "" {
 		return true, "auth-required: this relay only serves encrypted messages to authenticated users (NIP-42)"
 	}
@@ -93,7 +93,7 @@ func DMCountPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
 // subscription would keep receiving Kind 4 events for the life of the connection,
 // even though its REQ was rejected. It returns true to prevent the event from being
 // written to that connection.
-func DMBroadcastGuard(ws *khatru.WebSocket, evt *nostr.Event) bool {
+func DMBroadcastGuard(ws *bkind.WebSocket, evt *nostr.Event) bool {
 	authed := ws.AuthedPublicKey
 	if authed == "" {
 		return true
@@ -122,13 +122,13 @@ func DMBroadcastGuard(ws *khatru.WebSocket, evt *nostr.Event) bool {
 //
 // Server-side calls made through Relay.AddEvent have no connection and therefore no
 // authenticated key; those are let through when they carry the internal-call marker
-// that khatru itself uses for deletions and expirations.
+// that B Kind itself uses for deletions and expirations.
 func RequireAuthedAuthor(ctx context.Context, evt *nostr.Event) (bool, string) {
-	if khatru.IsInternalCall(ctx) {
+	if bkind.IsInternalCall(ctx) {
 		return false, ""
 	}
 
-	authed := khatru.GetAuthed(ctx)
+	authed := bkind.GetAuthed(ctx)
 	if authed == "" {
 		return true, "auth-required: you must be authenticated to publish to this relay (NIP-42)"
 	}

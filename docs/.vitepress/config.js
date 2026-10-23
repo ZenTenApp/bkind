@@ -1,6 +1,6 @@
 export default {
   lang: 'en-US',
-  title: 'khatru',
+  title: 'B Kind',
   description: 'a framework for making Nostr relays',
   themeConfig: {
     logo: '/logo.png',
@@ -8,7 +8,7 @@ export default {
       {text: 'Home', link: '/'},
       {text: 'Why', link: '/why'},
       {text: 'Docs', link: '/getting-started'},
-      {text: 'Source', link: 'https://github.com/fiatjaf/khatru'}
+      {text: 'Source', link: 'https://github.com/ZenTenApp/bkind'}
     ],
     sidebar: [
       {
@@ -37,7 +37,7 @@ export default {
       }
     ],
     editLink: {
-      pattern: 'https://github.com/fiatjaf/khatru/edit/master/docs/:path'
+      pattern: 'https://github.com/ZenTenApp/bkind/edit/master/docs/:path'
     }
   },
   head: [['link', {rel: 'icon', href: '/logo.png'}]],

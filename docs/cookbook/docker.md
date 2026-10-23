@@ -28,7 +28,7 @@ directly, the [Ubuntu guide](./deploying.md) covers that path.
   If the DM relay example is not on `master` yet, check out the branch that has it:
 
   ```sh
-  git clone -b complex/bkind https://github.com/fiatjaf/khatru /opt/bkind-src
+  git clone -b complex/bkind https://github.com/ZenTenApp/bkind /opt/bkind-src
   ls /opt/bkind-src/examples/bkind
   ```
 
@@ -161,7 +161,7 @@ curl -sS -H 'Accept: application/nostr+json' https://dm.example.com \
 }
 ```
 
-`45` is there because khatru adds it whenever `CountEvents` is wired; the relay only
+`45` is there because B Kind adds it whenever `CountEvents` is wired; the relay only
 lets clients count their own messages.
 
 Then the actual behaviour, with [`nak`](https://github.com/fiatjaf/nak)
@@ -264,7 +264,7 @@ sudo docker compose up -d --build
 - **Loopback publishing.** TLS, HTTP/1.1 websocket upgrades and slow-client
   timeouts all live in the proxy, where they belong. The relay never opens an
   outbound connection.
-- **`X-Forwarded-For` is overwritten, not appended.** khatru trusts the first
+- **`X-Forwarded-For` is overwritten, not appended.** B Kind trusts the first
   public address in that header, so appending a client-supplied value would let
   anyone spoof the per-ip rate limits. This is why the bundled `Caddyfile` uses
   `header_up X-Forwarded-For {remote_host}`; if you replace Caddy, keep that

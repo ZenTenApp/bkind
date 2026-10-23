@@ -7,7 +7,7 @@ outline: deep
 A relay is a long-running websocket server, so the pieces are the usual ones: a
 systemd unit, a TLS-terminating reverse proxy, and a persistent event store. This
 page uses the [Kind-4 DM relay](./dm-only-relay.md) as the example workload, but
-the service/proxy setup applies to any khatru relay.
+the service/proxy setup applies to any B Kind relay.
 
 The end state:
 
@@ -49,8 +49,8 @@ On ARM servers use `linux-arm64` in both the filename and the checksum line.
 ## 2. Build the relay
 
 ```sh
-git clone https://github.com/fiatjaf/khatru
-cd khatru
+git clone https://github.com/ZenTenApp/bkind
+cd bkind
 git checkout complex/bkind     # until this branch is merged
 
 # a static binary with no libc surprises
@@ -144,7 +144,7 @@ events/hour and 200/day per npub, 200/hour and 800/day per ip for reads.
 ```ini
 [Unit]
 Description=B Kind relay (Kind 4 direct messages)
-Documentation=https://github.com/fiatjaf/khatru/blob/master/docs/cookbook/dm-only-relay.md
+Documentation=https://github.com/ZenTenApp/bkind/blob/master/docs/cookbook/dm-only-relay.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -319,7 +319,7 @@ NIP-11 document:
 curl -sS -H 'Accept: application/nostr+json' https://dm.example.com | jq .
 ```
 
-Expect `supported_nips` to contain `4, 9, 40, 42, 62` (and `45`: khatru adds it
+Expect `supported_nips` to contain `4, 9, 40, 42, 62` (and `45`: B Kind adds it
 whenever `CountEvents` is wired), plus:
 
 ```json

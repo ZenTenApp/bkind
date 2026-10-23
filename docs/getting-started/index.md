@@ -7,19 +7,19 @@ outline: deep
 Download the library:
 
 ```bash
-go get github.com/fiatjaf/khatru
+go get github.com/ZenTenApp/bkind
 ```
 
 Include the library:
 
 ```go
-import "github.com/fiatjaf/khatru"
+import "github.com/ZenTenApp/bkind"
 ```
 
 Then in your `main()` function, instantiate a new `Relay`:
 
 ```go
-relay := khatru.NewRelay()
+relay := bkind.NewRelay()
 ```
 
 Optionally, set up basic info about the relay that will be returned according to [NIP-11](https://nips.nostr.com/11):
@@ -62,12 +62,12 @@ relay.RejectEvent = append(relay.RejectEvent, func (ctx context.Context, event *
 We can also make use of some default policies that come bundled with Khatru:
 
 ```go
-import "github.com/fiatjaf/khatru" // implied
+import "github.com/ZenTenApp/bkind" // implied
 
 relay.RejectEvent = append(relay.RejectEvent, policies.PreventLargeTags(120), policies.PreventTimestampsInThePast(time.Hour * 2), policies.PreventTimestampsInTheFuture(time.Minute * 30))
 ```
 
-There are many other ways to customize the relay behavior. Take a look at the [`Relay` struct docs](https://pkg.go.dev/github.com/fiatjaf/khatru#Relay) for more, or read the pages on the sidebar.
+There are many other ways to customize the relay behavior. Take a look at the [`Relay` struct docs](https://pkg.go.dev/github.com/ZenTenApp/bkind#Relay) for more, or read the pages on the sidebar.
 
 The last step is actually running the server. Our relay is actually an `http.Handler`, so it can just be ran directly with `http.ListenAndServe()` from the standard library:
 

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -31,7 +31,7 @@ type ServerOption func(*BlossomServer)
 
 // New creates a new BlossomServer with the given relay and service URL
 // Optional configuration can be provided via functional options
-func New(rl *khatru.Relay, serviceURL string) *BlossomServer {
+func New(rl *bkind.Relay, serviceURL string) *BlossomServer {
 	bs := &BlossomServer{
 		ServiceURL: serviceURL,
 	}

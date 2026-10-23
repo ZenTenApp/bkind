@@ -12,7 +12,7 @@ Here's a minimal example of what you should do to enable it:
 
 ```go
 func main() {
-    relay := khatru.NewRelay()
+    relay := bkind.NewRelay()
 
     // create blossom server with the relay and service URL
     bl := blossom.New(relay, "http://localhost:3334")
@@ -55,7 +55,7 @@ You can implement a custom redirect function. This function should return a stri
 
 Here's an example that redirects to a templated URL:
 ```go
-import "github.com/fiatjaf/khatru/policies"
+import "github.com/ZenTenApp/bkind/policies"
 
 // ...
 

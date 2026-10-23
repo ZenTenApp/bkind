@@ -2,7 +2,7 @@
 outline: deep
 ---
 
-# Mixing a `khatru` relay with other HTTP handlers
+# Mixing a B Kind relay with other HTTP handlers
 
 If you already have a web server with all its HTML handlers or a JSON HTTP API or anything like that, something like:
 
@@ -25,8 +25,8 @@ Then you can easily inject a relay or two there in alternative paths if you want
 ```diff
  	mux := http.NewServeMux()
 
-+	relay1 := khatru.NewRelay()
-+	relay2 := khatru.NewRelay()
++	relay1 := bkind.NewRelay()
++	relay2 := bkind.NewRelay()
 +	// and so on
 
  	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
@@ -48,7 +48,7 @@ If you want to expose your relay at the root path `/` that is also possible. You
 
 ```go
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 	// ... -- relay configuration steps (omitted for brevity)
 
 	mux := relay.Router() // the relay comes with its own http.ServeMux inside
@@ -63,10 +63,10 @@ func main() {
 }
 ```
 
-Every [`khatru.Relay`](https://pkg.go.dev/github.com/fiatjaf/khatru#Relay) instance comes with its own ['http.ServeMux`](https://pkg.go.dev/net/http#ServeMux) inside. It ensures all requests are handled normally, but intercepts the requests that are pertinent to the relay operation, specifically the WebSocket requests, and the [NIP-11](https://nips.nostr.com/11) and the [NIP-86](https://nips.nostr.com/86) HTTP requests.
+Every [`bkind.Relay`](https://pkg.go.dev/github.com/ZenTenApp/bkind#Relay) instance comes with its own ['http.ServeMux`](https://pkg.go.dev/net/http#ServeMux) inside. It ensures all requests are handled normally, but intercepts the requests that are pertinent to the relay operation, specifically the WebSocket requests, and the [NIP-11](https://nips.nostr.com/11) and the [NIP-86](https://nips.nostr.com/86) HTTP requests.
 
 ## Exposing multiple relays at the same path or at the root
 
-That's also possible, as long as you have a way of differentiating each HTTP request that comes at the middleware level and associating it with a `khatru.Relay` instance in the background.
+That's also possible, as long as you have a way of differentiating each HTTP request that comes at the middleware level and associating it with a `bkind.Relay` instance in the background.
 
 See [dynamic](../cookbook/dynamic) for an example that does that using the subdomain. [`countries`](https://git.fiatjaf.com/countries) does it using the requester country implied from its IP address.

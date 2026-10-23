@@ -4,7 +4,7 @@ outline: deep
 
 # NIP-42 `AUTH`
 
-`khatru` supports [NIP-42](https://nips.nostr.com/42) out of the box. The functionality is exposed in the following ways.
+B Kind supports [NIP-42](https://nips.nostr.com/42) out of the box. The functionality is exposed in the following ways.
 
 ## Sending arbitrary `AUTH` challenges
 
@@ -13,10 +13,10 @@ At any time you can send an `AUTH` message to a client that is making a request.
 It makes sense to give the user the option to authenticate right after they establish a connection, for example, when you have a relay that works differently depending on whether the user is authenticated or not.
 
 ```go
-relay := khatru.NewRelay()
+relay := bkind.NewRelay()
 
 relay.OnConnect = append(relay.OnConnect, func(ctx context.Context) {
-	khatru.RequestAuth(ctx)
+	bkind.RequestAuth(ctx)
 })
 ```
 
@@ -41,7 +41,7 @@ After a client is authenticated and opens a new subscription with `REQ` or sends
 
 ```go
 relay.RejectFilter = append(relay.RejectFilter, func(ctx context.Context, filter nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
+	authenticatedUser := bkind.GetAuthed(ctx)
 })
 ```
 
@@ -51,7 +51,7 @@ If the user is authenticated but still not allowed (because some specific filter
 
 ```go
 relay.RejectFilter = append(relay.RejectFilter, func(ctx context.Context, filter nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
+	authenticatedUser := bkind.GetAuthed(ctx)
 
 	if slices.Contain(authorizedUsers, authenticatedUser) {
 		return false
@@ -63,16 +63,16 @@ relay.RejectFilter = append(relay.RejectFilter, func(ctx context.Context, filter
 
 ## Reacting to a successful authentication
 
-Each `khatru.WebSocket` object has an `.Authed` channel that is closed whenever that connection performs a successful authentication.
+Each `bkind.WebSocket` object has an `.Authed` channel that is closed whenever that connection performs a successful authentication.
 
 You can use that to emulate a listener for these events in case you want to keep track of who is authenticating in real time and not only check it when they request for something.
 
 ```go
 	relay.OnConnect = append(relay.OnConnect,
-		khatru.RequestAuth,
+		bkind.RequestAuth,
 		func(ctx context.Context) {
 			go func(ctx context.Context) {
-				conn := khatru.GetConnection(ctx)
+				conn := bkind.GetConnection(ctx)
 				select {
 				case <-ctx.Done():
 					fmt.Println("connection closed")

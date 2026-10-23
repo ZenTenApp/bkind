@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ZenTenApp/bkind"
 	"github.com/fiatjaf/eventstore/elasticsearch"
-	"github.com/fiatjaf/khatru"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := elasticsearch.ElasticsearchStorage{URL: ""}
 	if err := db.Init(); err != nil {

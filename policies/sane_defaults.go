@@ -3,10 +3,10 @@ package policies
 import (
 	"time"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 )
 
-func ApplySaneDefaults(relay *khatru.Relay) {
+func ApplySaneDefaults(relay *bkind.Relay) {
 	relay.RejectEvent = append(relay.RejectEvent,
 		RejectEventsWithBase64Media,
 		EventIPRateLimiter(2, time.Minute*3, 10),

@@ -13,7 +13,7 @@ First you do some geohashing calculation to discover that `d6nvp` corresponds to
 ```go
 func main () {
 	// other stuff here
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	relay.QueryEvents = append(relay.QueryEvents,
 		handleWeatherQuery,

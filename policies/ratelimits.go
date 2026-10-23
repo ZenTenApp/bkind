@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -13,7 +13,7 @@ func EventIPRateLimiter(tokensPerInterval int, interval time.Duration, maxTokens
 	rl := startRateLimitSystem[string](tokensPerInterval, interval, maxTokens)
 
 	return func(ctx context.Context, _ *nostr.Event) (reject bool, msg string) {
-		ip := khatru.GetIP(ctx)
+		ip := bkind.GetIP(ctx)
 		if ip == "" {
 			return false, ""
 		}
@@ -33,7 +33,7 @@ func EventAuthedPubKeyRateLimiter(tokensPerInterval int, interval time.Duration,
 	rl := startRateLimitSystem[string](tokensPerInterval, interval, maxTokens)
 
 	return func(ctx context.Context, _ *nostr.Event) (reject bool, msg string) {
-		user := khatru.GetAuthed(ctx)
+		user := bkind.GetAuthed(ctx)
 		if user == "" {
 			return false, ""
 		}
@@ -48,7 +48,7 @@ func FilterAuthedPubKeyRateLimiter(tokensPerInterval int, interval time.Duration
 	rl := startRateLimitSystem[string](tokensPerInterval, interval, maxTokens)
 
 	return func(ctx context.Context, _ nostr.Filter) (reject bool, msg string) {
-		user := khatru.GetAuthed(ctx)
+		user := bkind.GetAuthed(ctx)
 		if user == "" {
 			return false, ""
 		}
@@ -60,7 +60,7 @@ func ConnectionRateLimiter(tokensPerInterval int, interval time.Duration, maxTok
 	rl := startRateLimitSystem[string](tokensPerInterval, interval, maxTokens)
 
 	return func(r *http.Request) bool {
-		return rl(khatru.GetIPFromRequest(r))
+		return rl(bkind.GetIPFromRequest(r))
 	}
 }
 
@@ -68,6 +68,6 @@ func FilterIPRateLimiter(tokensPerInterval int, interval time.Duration, maxToken
 	rl := startRateLimitSystem[string](tokensPerInterval, interval, maxTokens)
 
 	return func(ctx context.Context, _ nostr.Filter) (reject bool, msg string) {
-		return rl(khatru.GetIP(ctx)), "rate-limited: there is a bug in the client, no one should be making so many requests"
+		return rl(bkind.GetIP(ctx)), "rate-limited: there is a bug in the client, no one should be making so many requests"
 	}
 }

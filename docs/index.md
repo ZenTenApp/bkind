@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: khatru
+  name: B Kind
   text: a framework for making Nostr relays
   image:
     src: /logo.png
@@ -24,7 +24,7 @@ features:
   - title: It plugs into event stores easily
     icon: 📦
     link: /core/eventstore
-    details: khatru's companion, the `eventstore` library, provides all methods for storing and querying events efficiently from SQLite, LMDB, Postgres, Badger and others.
+    details: B Kind's companion, the `eventstore` library, provides all methods for storing and querying events efficiently from SQLite, LMDB, Postgres, Badger and others.
   - title: It supports NIP-42 AUTH
     icon: 🪪
     link: /core/auth
@@ -35,17 +35,17 @@ features:
     details: You just define your custom handlers for each RPC call and they will be exposed appropriately to management clients.
   - title: It's written in Go
     icon: 🛵
-    link: https://pkg.go.dev/github.com/fiatjaf/khatru
+    link: https://pkg.go.dev/github.com/ZenTenApp/bkind
     details: That means it is fast and lightweight, you can learn the language in 5 minutes and it builds your relay into a single binary that's easy to ship and deploy.
 ---
 
-## A glimpse of `khatru`'s power
+## A glimpse of B Kind's power
 
 It allows you to create a fully-functional relay in 7 lines of code:
 
 ```go
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 	db := badger.BadgerBackend{Path: "/tmp/khatru-badgern-tmp"}
     db.Init()
 	relay.StoreEvent = append(relay.StoreEvent, db.SaveEvent)

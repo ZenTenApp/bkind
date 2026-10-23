@@ -1,16 +1,16 @@
 <div>
-<p><b>This repository is in maintenance mode and adventurous programmers are encouraged to try <a href="https://pkg.go.dev/fiatjaf.com/nostr/khatru"><code>fiatjaf.com/nostr/khatru@master</code></a> instead.</b></p>
+<p><b>This repository is in maintenance mode and adventurous programmers are encouraged to try <a href="https://pkg.go.dev/github.com/ZenTenApp/bkind"><code>github.com/ZenTenApp/bkind@master</code></a> instead.</b></p>
 
 <p>The core codebase and functionality are the same, but the API breaks a little bit (for good reason) and there are some new features.</p>
 </div>
 
 ---
 
-# khatru, a relay framework [![docs badge](https://img.shields.io/badge/docs-reference-blue)](https://pkg.go.dev/github.com/fiatjaf/khatru#Relay)
+# B Kind, a relay framework [![docs badge](https://img.shields.io/badge/docs-reference-blue)](https://pkg.go.dev/github.com/ZenTenApp/bkind#Relay)
 
-[![Run Tests](https://github.com/fiatjaf/khatru/actions/workflows/test.yml/badge.svg)](https://github.com/fiatjaf/khatru/actions/workflows/test.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/fiatjaf/khatru.svg)](https://pkg.go.dev/github.com/fiatjaf/khatru)
-[![Go Report Card](https://goreportcard.com/badge/github.com/fiatjaf/khatru)](https://goreportcard.com/report/github.com/fiatjaf/khatru)
+[![Run Tests](https://github.com/ZenTenApp/bkind/actions/workflows/test.yml/badge.svg)](https://github.com/ZenTenApp/bkind/actions/workflows/test.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ZenTenApp/bkind.svg)](https://pkg.go.dev/github.com/ZenTenApp/bkind)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ZenTenApp/bkind)](https://goreportcard.com/report/github.com/ZenTenApp/bkind)
 
 Khatru makes it easy to write very very custom relays:
 
@@ -30,13 +30,13 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 	"github.com/nbd-wtf/go-nostr"
 )
 
 func main() {
 	// create the relay instance
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	// set up some basic properties (will be returned on the NIP-11 endpoint)
 	relay.Info.Name = "my relay"
@@ -97,7 +97,7 @@ func main() {
 
 		// define your own policies
 		func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
-			if pubkey := khatru.GetAuthed(ctx); pubkey != "" {
+			if pubkey := bkind.GetAuthed(ctx); pubkey != "" {
 				log.Printf("request from %s\n", pubkey)
 				return false, ""
 			}
@@ -140,7 +140,7 @@ Fear no more. Using the https://github.com/fiatjaf/eventstore module you get a b
 
 ### But I don't want to write a bunch of custom policies!
 
-Fear no more. We have a bunch of common policies written in the `github.com/fiatjaf/khatru/policies` package and also a handpicked selection of base sane defaults, which you can apply with:
+Fear no more. We have a bunch of common policies written in the `github.com/ZenTenApp/bkind/policies` package and also a handpicked selection of base sane defaults, which you can apply with:
 
 ```go
 	policies.ApplySaneDefaults(relay)

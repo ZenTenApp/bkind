@@ -6,7 +6,7 @@ outline: deep
 
 If you have one (or more) set of policies that have to be executed in sequence (for example, first you check for the presence of a tag, then later in the next policies you use that tag without checking) and they only apply to some class of events, but you still want your relay to deal with other classes of events that can lead to cumbersome sets of rules, always having to check if an event meets the requirements and so on. There is where routing can help you.
 
-It also can be handy if you get a [`khatru.Relay`](https://pkg.go.dev/github.com/fiatjaf/khatru#Relay) from somewhere else, like a library such as [`relay29`](https://github.com/fiatjaf/relay29), and you want to combine it with other policies without some interfering with the others. As in the example below:
+It also can be handy if you get a [`bkind.Relay`](https://pkg.go.dev/github.com/ZenTenApp/bkind#Relay) from somewhere else, like a library such as [`relay29`](https://github.com/fiatjaf/relay29), and you want to combine it with other policies without some interfering with the others. As in the example below:
 
 ```go
 sk := os.Getenv("RELAY_SECRET_KEY")
@@ -20,7 +20,7 @@ groupsRelay, _ := khatru29.Init(relay29.Options{Domain: "example.com", DB: group
 // a relay for everything else
 publicStore := slicestore.SliceStore{}
 publicStore.Init()
-publicRelay := khatru.NewRelay()
+publicRelay := bkind.NewRelay()
 publicRelay.StoreEvent = append(publicRelay.StoreEvent, publicStore.SaveEvent)
 publicRelay.QueryEvents = append(publicRelay.QueryEvents, publicStore.QueryEvents)
 publicRelay.CountEvents = append(publicRelay.CountEvents, publicStore.CountEvents)
@@ -28,7 +28,7 @@ publicRelay.DeleteEvent = append(publicRelay.DeleteEvent, publicStore.DeleteEven
 // ...
 
 // a higher-level relay that just routes between the two above
-router := khatru.NewRouter()
+router := bkind.NewRouter()
 
 // route requests and events to the groups relay
 router.Route().

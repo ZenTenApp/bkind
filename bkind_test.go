@@ -1,4 +1,4 @@
-package khatru_test
+package bkind_test
 
 import (
 	"context"
@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/policies"
 	"github.com/fasthttp/websocket"
 	"github.com/fiatjaf/eventstore/slicestore"
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/policies"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip11"
 	"github.com/nbd-wtf/go-nostr/nip42"
@@ -72,10 +72,10 @@ func (s *testStore) QueryEvents(ctx context.Context, filter nostr.Filter) (chan 
 }
 
 // The relay wired here mirrors examples/bkind/main.go. Keep the two in sync.
-func newBKindRelay(t *testing.T, serviceURL string) (*khatru.Relay, *testStore) {
+func newBKindRelay(t *testing.T, serviceURL string) (*bkind.Relay, *testStore) {
 	t.Helper()
 
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 	relay.ServiceURL = serviceURL
 
 	store := &testStore{}

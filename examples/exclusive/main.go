@@ -6,14 +6,14 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/policies"
 	"github.com/fiatjaf/eventstore/lmdb"
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/policies"
 	"github.com/nbd-wtf/go-nostr"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := lmdb.LMDBBackend{Path: "/tmp/exclusive"}
 	os.MkdirAll(db.Path, 0o755)

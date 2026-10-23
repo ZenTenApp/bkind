@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ZenTenApp/bkind"
 	"github.com/fiatjaf/eventstore/badger"
-	"github.com/fiatjaf/khatru"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := badger.BadgerBackend{Path: "/tmp/khatru-badgern-tmp"}
 	if err := db.Init(); err != nil {

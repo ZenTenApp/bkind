@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ZenTenApp/bkind"
 	"github.com/fiatjaf/eventstore/postgresql"
-	"github.com/fiatjaf/khatru"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := postgresql.PostgresBackend{DatabaseURL: "postgresql://localhost:5432/tmp-khatru-relay"}
 	if err := db.Init(); err != nil {

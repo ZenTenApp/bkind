@@ -160,9 +160,9 @@ store.
 exported helpers make that usable instead of forcing callers to reach into the
 package:
 
-- `khatru.WithInternalCall(ctx)` — the relay acting on the store itself
+- `bkind.WithInternalCall(ctx)` — the relay acting on the store itself
   (deletions, expirations). Policies that require authentication let it through.
-- `khatru.WithAuthenticatedPubKey(ctx, pubkey)` — act on behalf of a user, and
+- `bkind.WithAuthenticatedPubKey(ctx, pubkey)` — act on behalf of a user, and
   what the policy tests use.
 
 `GetAuthed` now also consults the context value, so both work outside a
@@ -265,7 +265,7 @@ variables (`-url`, `-addr`, `-db`, `-sweep-interval`, `-max-expiration`,
   reads through a different query path (for example `COUNT` on its own events) may
   briefly see an event the sweep has not removed yet.
 - **Per-IP limits are only as good as the proxy in front of the relay.**
-- **NIP-11 also advertises 45** (COUNT), because khatru adds it whenever
+- **NIP-11 also advertises 45** (COUNT), because B Kind adds it whenever
   `CountEvents` is wired. That is correct: clients can count their own messages,
   and `DMCountPolicy` refuses everything else.
 - **The store defaults to in-memory.** Without `-db` the example uses

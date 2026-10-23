@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/blossom"
 	"github.com/fiatjaf/eventstore/badger"
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/blossom"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := &badger.BadgerBackend{Path: "/tmp/khatru-badger-tmp"}
 	if err := db.Init(); err != nil {

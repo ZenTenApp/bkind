@@ -1,4 +1,4 @@
-# Why `khatru`?
+# Why B Kind?
 
 If you want to craft a relay that isn't completely dumb, but it's supposed to
 
@@ -7,11 +7,11 @@ If you want to craft a relay that isn't completely dumb, but it's supposed to
 * require users to authenticate for some operations and not for others;
 * and other stuff.
 
-`khatru` provides a simple framework for creating your custom relay without having to reimplement it all from scratch or hack into other relay codebases.
+B Kind provides a simple framework for creating your custom relay without having to reimplement it all from scratch or hack into other relay codebases.
 
 # Use cases
 
-`khatru` is being used today in the real world by
+B Kind continues `khatru`, which is used today in the real world by
 
 * [pyramid](https://github.com/github-tijlxyz/khatru-pyramid), a relay with a invite-based whitelisting system similar to [lobste.rs](https://lobste.rs)
 * [triflector](https://github.com/coracle-social/triflector), a relay which enforces authentication based on custom policy

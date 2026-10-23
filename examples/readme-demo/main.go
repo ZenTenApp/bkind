@@ -6,14 +6,14 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/policies"
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/policies"
 	"github.com/nbd-wtf/go-nostr"
 )
 
 func main() {
 	// create the relay instance
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	// set up some basic properties (will be returned on the NIP-11 endpoint)
 	relay.Info.Name = "my relay"
@@ -74,7 +74,7 @@ func main() {
 
 		// define your own policies
 		func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
-			if pubkey := khatru.GetAuthed(ctx); pubkey != "" {
+			if pubkey := bkind.GetAuthed(ctx); pubkey != "" {
 				log.Printf("request from %s\n", pubkey)
 				return false, ""
 			}

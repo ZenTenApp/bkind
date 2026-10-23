@@ -6,7 +6,7 @@ outline: deep
 
 [NIP-86](https://nips.nostr.com/86) specifies a set of RPC methods for managing the boring aspects of relays, such as whitelisting or banning users, banning individual events, banning IPs and so on.
 
-All [`khatru.Relay`](https://pkg.go.dev/github.com/fiatjaf/khatru#Relay) instances expose a field `ManagementAPI` with a [`RelayManagementAPI`](https://pkg.go.dev/github.com/fiatjaf/khatru#RelayManagementAPI) instance inside, which can be used for creating handlers for each of the RPC methods.
+All [`bkind.Relay`](https://pkg.go.dev/github.com/ZenTenApp/bkind#Relay) instances expose a field `ManagementAPI` with a [`RelayManagementAPI`](https://pkg.go.dev/github.com/ZenTenApp/bkind#RelayManagementAPI) instance inside, which can be used for creating handlers for each of the RPC methods.
 
 There is also a generic `RejectAPICall` which is a slice of functions that will be called before any RPC method, if they exist and, if any of them returns true, the request will be rejected.
 
@@ -17,11 +17,11 @@ var owner = "<my-own-pubkey>"
 var allowedPubkeys = make([]string, 0, 10)
 
 func main () {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	relay.ManagementAPI.RejectAPICall = append(relay.ManagementAPI.RejectAPICall,
 		func(ctx context.Context, mp nip86.MethodParams) (reject bool, msg string) {
-			user := khatru.GetAuthed(ctx)
+			user := bkind.GetAuthed(ctx)
 			if user != owner {
 				return true, "go away, intruder"
 			}
@@ -51,10 +51,10 @@ In the following example any current member can include any other pubkey, and an
 var allowedPubkeys = []string{"<my-own-pubkey>"}
 
 func main () {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	relay.ManagementAPI.AllowPubKey = func(ctx context.Context, pubkey string, reason string) error {
-		caller := khatru.GetAuthed(ctx)
+		caller := bkind.GetAuthed(ctx)
 
 		if slices.Contains(allowedPubkeys, caller) {
 			allowedPubkeys = append(allowedPubkeys, pubkey)
@@ -64,7 +64,7 @@ func main () {
 		return fmt.Errorf("you're not authorized")
 	}
 	relay.ManagementAPI.BanPubKey = func(ctx context.Context, pubkey string, reason string) error {
-		caller := khatru.GetAuthed(ctx)
+		caller := bkind.GetAuthed(ctx)
 
 		callerIdx := slices.Index(allowedPubkeys, caller)
 		if callerIdx == -1 {

@@ -11,7 +11,7 @@ We'll assume you'll be polling some HTTP API that gives you the game's current s
 ```go
 func main () {
 	// other stuff here
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	go startPollingGame(relay)
 	// other stuff here
@@ -22,7 +22,7 @@ type GameStatus struct {
 	TeamB int `json:"team_b"`
 }
 
-func startPollingGame(relay *khatru.Relay) {
+func startPollingGame(relay *bkind.Relay) {
 	current := GameStatus{0, 0}
 
 	for {
@@ -41,7 +41,7 @@ func startPollingGame(relay *khatru.Relay) {
 				}
 				evt.Sign(global.RelayPrivateKey)
 				// calling BroadcastEvent will send the event to everybody who has been listening for tag "t=[this-game]"
-				// there is no need to do any code to keep track of these clients or who is listening to what, khatru
+				// there is no need to do any code to keep track of these clients or who is listening to what, B Kind
 				// does that already in the background automatically
 				relay.BroadcastEvent(evt)
 

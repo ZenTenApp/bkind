@@ -4,7 +4,7 @@ import (
 	"context"
 	"slices"
 
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -16,7 +16,7 @@ func RejectKind04Snoopers(ctx context.Context, filter nostr.Filter) (bool, strin
 		return false, ""
 	}
 
-	ws := khatru.GetConnection(ctx)
+	ws := bkind.GetConnection(ctx)
 	senders := filter.Authors
 	receivers, _ := filter.Tags["p"]
 	switch {

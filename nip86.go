@@ -1,4 +1,4 @@
-package khatru
+package bkind
 
 import (
 	"context"

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/policies"
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/policies"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -45,17 +45,17 @@ func TestRequireAuthedAuthor(t *testing.T) {
 		t.Fatalf("unauthenticated write should be rejected with a challenge, got %v %q", reject, msg)
 	}
 
-	if reject, _ := policies.RequireAuthedAuthor(khatru.WithAuthenticatedPubKey(ctx, bob), evt(4, nil, "x")); !reject {
+	if reject, _ := policies.RequireAuthedAuthor(bkind.WithAuthenticatedPubKey(ctx, bob), evt(4, nil, "x")); !reject {
 		t.Fatal("a write on behalf of another key should be rejected")
 	}
 
-	if reject, msg := policies.RequireAuthedAuthor(khatru.WithAuthenticatedPubKey(ctx, alice), evt(4, nil, "x")); reject {
+	if reject, msg := policies.RequireAuthedAuthor(bkind.WithAuthenticatedPubKey(ctx, alice), evt(4, nil, "x")); reject {
 		t.Fatalf("an authenticated author should be accepted, got %q", msg)
 	}
 
 	// server-side deletions and expirations go through Relay.AddEvent without a
 	// connection and must not be blocked by the write policies
-	if reject, msg := policies.RequireAuthedAuthor(khatru.WithInternalCall(ctx), evt(4, nil, "x")); reject {
+	if reject, msg := policies.RequireAuthedAuthor(bkind.WithInternalCall(ctx), evt(4, nil, "x")); reject {
 		t.Fatalf("internal calls should be accepted, got %q", msg)
 	}
 }
@@ -285,7 +285,7 @@ func TestValidateKind62Shape(t *testing.T) {
 }
 
 func TestDMReadPolicy(t *testing.T) {
-	ctx := khatru.WithAuthenticatedPubKey(context.Background(), alice)
+	ctx := bkind.WithAuthenticatedPubKey(context.Background(), alice)
 
 	tests := []struct {
 		name   string
@@ -341,7 +341,7 @@ func TestDMReadPolicy(t *testing.T) {
 
 func TestDMBroadcastGuard(t *testing.T) {
 	blocked := func(authed string, e *nostr.Event) bool {
-		return policies.DMBroadcastGuard(&khatru.WebSocket{AuthedPublicKey: authed}, e)
+		return policies.DMBroadcastGuard(&bkind.WebSocket{AuthedPublicKey: authed}, e)
 	}
 
 	dm := evt(4, nostr.Tags{{"p", bob}}, "ciphertext")
@@ -373,7 +373,7 @@ func TestDMBroadcastGuard(t *testing.T) {
 
 func TestFilterAuthedPubKeyRateLimiter(t *testing.T) {
 	policy := policies.FilterAuthedPubKeyRateLimiter(1, time.Hour, 1)
-	ctx := khatru.WithAuthenticatedPubKey(context.Background(), alice)
+	ctx := bkind.WithAuthenticatedPubKey(context.Background(), alice)
 
 	if reject, msg := policy(ctx, nostr.Filter{}); reject {
 		t.Fatalf("the first request should pass, got %q", msg)
@@ -383,7 +383,7 @@ func TestFilterAuthedPubKeyRateLimiter(t *testing.T) {
 	}
 
 	// another user has their own budget
-	if reject, msg := policy(khatru.WithAuthenticatedPubKey(context.Background(), bob), nostr.Filter{}); reject {
+	if reject, msg := policy(bkind.WithAuthenticatedPubKey(context.Background(), bob), nostr.Filter{}); reject {
 		t.Fatalf("another user should not be limited, got %q", msg)
 	}
 

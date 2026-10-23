@@ -6,13 +6,13 @@ outline: deep
 
 Khatru doesn't make any assumptions about how you'll want to store events. Any function can be plugged in to the `StoreEvent`, `DeleteEvent`, `ReplaceEvent` and `QueryEvents` hooks.
 
-However the [`eventstore`](https://github.com/fiatjaf/eventstore) library has adapters that you can easily plug into `khatru`'s hooks.
+However the [`eventstore`](https://github.com/fiatjaf/eventstore) library has adapters that you can easily plug into B Kind's hooks.
 
 # Using the `eventstore` library
 
 The library includes many different adapters -- often called "backends" --, written by different people and with different levels of quality, reliability and speed.
 
-For all of them you start by instantiating a struct containing some basic options and a pointer (a file path for local databases, a connection string for remote databases) to the data. Then you call `.Init()` and if all is well you're ready to start storing, querying and deleting events, so you can pass the respective functions to their `khatru` counterparts. These eventstores also expose a `.Close()` function that must be called if you're going to stop using that store and keep your application open.
+For all of them you start by instantiating a struct containing some basic options and a pointer (a file path for local databases, a connection string for remote databases) to the data. Then you call `.Init()` and if all is well you're ready to start storing, querying and deleting events, so you can pass the respective functions to their B Kind counterparts. These eventstores also expose a `.Close()` function that must be called if you're going to stop using that store and keep your application open.
 
 Here's an example with the [Badger](https://pkg.go.dev/github.com/fiatjaf/eventstore/badger) adapter, made for the [Badger](https://github.com/dgraph-io/badger) embedded key-value database:
 
@@ -24,11 +24,11 @@ import (
 	"net/http"
 
 	"github.com/fiatjaf/eventstore/badger"
-	"github.com/fiatjaf/khatru"
+	"github.com/ZenTenApp/bkind"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := badger.BadgerBackend{Path: "/tmp/khatru-badger-tmp"}
 	if err := db.Init(); err != nil {

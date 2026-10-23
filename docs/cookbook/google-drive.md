@@ -9,7 +9,7 @@ Suppose you have a bunch of events stored in text files on Google Drive and you 
 ```go
 func main () {
 	// other stuff here
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	relay.StoreEvent = append(relay.StoreEvent, handleEvent)
 	relay.QueryEvents = append(relay.QueryEvents, handleQuery)

@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/ZenTenApp/bkind"
 	"github.com/fiatjaf/eventstore/lmdb"
-	"github.com/fiatjaf/khatru"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := lmdb.LMDBBackend{Path: "/tmp/khatru-lmdb-tmp"}
 	os.MkdirAll(db.Path, 0o755)

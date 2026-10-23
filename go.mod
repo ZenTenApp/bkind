@@ -1,4 +1,4 @@
-module github.com/fiatjaf/khatru
+module github.com/ZenTenApp/bkind
 
 go 1.24.1
 

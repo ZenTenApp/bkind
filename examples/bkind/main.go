@@ -23,10 +23,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZenTenApp/bkind"
+	"github.com/ZenTenApp/bkind/policies"
 	"github.com/fiatjaf/eventstore/badger"
 	"github.com/fiatjaf/eventstore/slicestore"
-	"github.com/fiatjaf/khatru"
-	"github.com/fiatjaf/khatru/policies"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip11"
 	"github.com/nbd-wtf/go-nostr/nip40"
@@ -140,8 +140,8 @@ func parseConfig() config {
 
 // newRelay wires the store and the policy set. It returns the relay plus a close
 // function for the store.
-func newRelay(cfg config) (*khatru.Relay, func(), error) {
-	relay := khatru.NewRelay()
+func newRelay(cfg config) (*bkind.Relay, func(), error) {
+	relay := bkind.NewRelay()
 	relay.ServiceURL = cfg.serviceURL
 	relay.MaxMessageSize = maxMessageBytes
 	relay.SetExpirationInterval(cfg.sweepInterval)

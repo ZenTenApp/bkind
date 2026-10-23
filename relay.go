@@ -1,4 +1,4 @@
-package khatru
+package bkind
 
 import (
 	"context"
@@ -18,10 +18,10 @@ import (
 
 func NewRelay() *Relay {
 	rl := &Relay{
-		Log: log.New(os.Stderr, "[khatru-relay] ", log.LstdFlags),
+		Log: log.New(os.Stderr, "[bkind] ", log.LstdFlags),
 
 		Info: &nip11.RelayInformationDocument{
-			Software:      "https://github.com/fiatjaf/khatru",
+			Software:      "https://github.com/ZenTenApp/bkind",
 			Version:       "n/a",
 			SupportedNIPs: []any{1, 11, 40, 42, 70, 86},
 		},
@@ -84,7 +84,7 @@ type Relay struct {
 	// editing info will affect the NIP-11 responses
 	Info *nip11.RelayInformationDocument
 
-	// Default logger, as set by NewServer, is a stdlib logger prefixed with "[khatru-relay] ",
+	// Default logger, as set by NewServer, is a stdlib logger prefixed with "[bkind] ",
 	// outputting to stderr.
 	Log *log.Logger
 

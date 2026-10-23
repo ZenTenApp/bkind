@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ZenTenApp/bkind"
 	"github.com/fiatjaf/eventstore/sqlite3"
-	"github.com/fiatjaf/khatru"
 )
 
 func main() {
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 
 	db := sqlite3.SQLite3Backend{DatabaseURL: "/tmp/khatru-sqlite-tmp"}
 	if err := db.Init(); err != nil {

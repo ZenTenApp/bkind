@@ -2,7 +2,7 @@
 outline: deep
 ---
 
-# Generating `khatru` relays dynamically and serving them from the same path
+# Generating B Kind relays dynamically and serving them from the same path
 
 Suppose you want to expose a different relay interface depending on the subdomain that is accessed. I don't know, maybe you want to serve just events with pictures on `pictures.example.com` and just events with audio files on `audios.example.com`; maybe you want just events in English on `en.example.com` and just examples in Portuguese on `pt.example.com`, there are many possibilities.
 
@@ -10,8 +10,8 @@ You could achieve that with a scheme like the following
 
 ```go
 var topLevelHost = "example.com"
-var mainRelay = khatru.NewRelay() // we're omitting all the configuration steps for brevity
-var subRelays = xsync.NewMapOf[string, *khatru.Relay]()
+var mainRelay = bkind.NewRelay() // we're omitting all the configuration steps for brevity
+var subRelays = xsync.NewMapOf[string, *bkind.Relay]()
 
 func main () {
 	handler := http.HandlerFunc(dynamicRelayHandler)
@@ -21,7 +21,7 @@ func main () {
 }
 
 func dynamicRelayHandler(w http.ResponseWriter, r *http.Request) {
-	var relay *khatru.Relay
+	var relay *bkind.Relay
 	subdomain := r.Host[0 : len(topLevelHost)-len(topLevelHost)]
 	if subdomain == "" {
 		// no subdomain, use the main top-level relay
@@ -30,7 +30,7 @@ func dynamicRelayHandler(w http.ResponseWriter, r *http.Request) {
 		// call on subdomain, so get a dynamic relay
 		subdomain = subdomain[0 : len(subdomain)-1] // remove dangling "."
 		// get a dynamic relay
-		relay, _ = subRelays.LoadOrCompute(subdomain, func () *khatru.Relay {
+		relay, _ = subRelays.LoadOrCompute(subdomain, func () *bkind.Relay {
 			return makeNewRelay(subdomain)
 		})
 	}
@@ -38,9 +38,9 @@ func dynamicRelayHandler(w http.ResponseWriter, r *http.Request) {
 	relay.ServeHTTP(w, r)
 }
 
-func makeNewRelay (subdomain string) *khatru.Relay {
+func makeNewRelay (subdomain string) *bkind.Relay {
 	// somehow use the subdomain to generate a relay with specific configurations
-	relay := khatru.NewRelay()
+	relay := bkind.NewRelay()
 	switch subdomain {
 	case "pictures":
 		// relay configuration shenanigans go here
