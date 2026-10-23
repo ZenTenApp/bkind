@@ -32,6 +32,7 @@ export default {
           { text: 'Using something like Google Drive', link: '/cookbook/google-drive' },
           { text: 'A Kind-4-Only DM Relay', link: '/cookbook/dm-only-relay' },
           { text: 'Deploying a Relay on Ubuntu', link: '/cookbook/deploying' },
+          { text: 'Deploying with Docker', link: '/cookbook/docker' },
         ]
       }
     ],

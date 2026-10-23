@@ -3,8 +3,9 @@
 // (NIP-62). Everything is authenticated, everything expires, and a message is only
 // ever readable by its author and its recipient.
 //
-// See docs/cookbook/dm-only-relay.md for the reasoning behind each policy and
-// docs/cookbook/deploying.md for running it on a server.
+// See docs/cookbook/dm-only-relay.md for the reasoning behind each policy,
+// docs/cookbook/deploying.md for running it on a server, and
+// docs/cookbook/docker.md for the container path.
 package main
 
 import (

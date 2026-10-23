@@ -15,11 +15,11 @@ The end state:
 client ──wss──> Caddy (443, TLS) ──ws──> bkind (127.0.0.1:3334) ──> badger (/var/lib/bkind)
 ```
 
-The relay itself never talks to the internet: it binds to loopback, TLS and the
-public port belong to the proxy. If you would rather not install Go on the
-server, the same stack is available as a container image and a compose file:
-see section 6. That keeps certificate handling, HTTP/1.1
-websocket upgrades and slow-client timeouts in one place.
+The relay itself never talks to the internet: it binds to loopback, so certificate
+handling, HTTP/1.1 websocket upgrades and slow-client timeouts all stay in one
+place. If you would rather not install Go on the server, the same stack is
+available as a container image and a compose file — see
+[Docker](./docker.md).
 
 ## 1. Prerequisites
 
@@ -218,65 +218,21 @@ sudo journalctl -u bkind -f
 
 At this point the relay answers on loopback; it is not publicly reachable yet.
 
-## 6. Containers instead of systemd
+## 6. Containers
 
-Steps 2 to 5 have container equivalents, and they are checked in:
+The files in `examples/bkind/` also build a `scratch` image and a compose stack,
+with the same TLS front end included. That path needs no Go toolchain and no
+systemd unit; it is written up separately:
 
-- `examples/bkind/Dockerfile` — two stages, `CGO_ENABLED=0`, ends in `scratch`
-  with no shell and no libc. The result is ~15MB and has nothing to patch.
+- `examples/bkind/Dockerfile` — two stages, `CGO_ENABLED=0`, ~15MB runtime with
+  no shell or libc.
 - `examples/bkind/docker-compose.yml` — the relay plus an optional Caddy profile.
 - `examples/bkind/Caddyfile` — the TLS front end that profile mounts.
 - `examples/bkind/.env.example` — copy to `.env`.
 
-```sh
-cd examples/bkind
-cp .env.example .env
-docker compose up -d --build
-
-curl -sS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/ | jq .supported_nips
-```
-
-With TLS termination and certificates handled inside the stack:
-
-```sh
-# .env:  BKIND_URL=wss://dm.example.com
-#        BKIND_DOMAIN=dm.example.com
-docker compose --profile tls up -d --build
-```
-
-`BKIND_DOMAIN` is required for the profile (compose refuses to start without it)
-and must match `BKIND_URL`'s host.
-
-Container-specific things worth knowing before you rely on it:
-
-- **Never scale it.** `--scale bkind=2` makes the second container fail its badger
-  `LOCK`, and the rate limiters keep their counters in memory, so replicas would
-  limit independently anyway. One process, one volume.
-- **The volume owns the store, not a host directory.** `bkind-data` inherits
-  `/data`'s ownership (uid 65534) from the image, so it just works. A bind mount
-  arrives root-owned and the relay cannot open the database — `chown -R
-  65534:65534` it first, or keep the named volume.
-- **There is no healthcheck**, because the runtime image is `scratch` and cannot
-  run a probe. Use the NIP-11 `GET` above from the host, or from a separate
-  container.
-- **`read_only: true`** is set on the service: `/data` is the only writable path,
-  with a small tmpfs on `/tmp`. If you add a feature that writes elsewhere, mount
-  that path explicitly.
-- **`stop_grace_period: 30s`** matters: the relay stops accepting on `SIGTERM` and
-  drains for up to 15s before closing the store, which is longer than docker's 10s
-  default.
-- **ACME state** (account key, issued certificates) for the `tls` profile lives in
-  the `caddy-data` volume. Lose it and Caddy re-requests certificates, which can
-  hit Let's Encrypt rate limits if you do it repeatedly.
-
-Backups under compose are a volume copy, and the same 75h caveat applies:
-
-```sh
-docker compose stop bkind
-docker run --rm -v bkind_bkind-data:/data:ro -v "$PWD":/backup alpine \
-  tar -C /data -czf /backup/bkind-$(date +%F).tar.gz .
-docker compose start bkind
-```
+See **[Deploying with Docker](./docker.md)** for the from-a-bare-server runbook
+and the container-specific gotchas (volume ownership, no shell in the image, never
+scaling).
 
 ## 7. TLS proxy
 
@@ -428,7 +384,7 @@ journalctl -u bkind --since '1 hour ago' | grep -i error
 Cap the journal in `/etc/systemd/journald.conf` (`SystemMaxUse=500M`) if the box
 is small, then `sudo systemctl restart systemd-journald`.
 
-**Upgrading.** (Under compose: `docker compose up -d --build` instead.)
+**Upgrading.**
 
 ```sh
 sudo systemctl stop bkind

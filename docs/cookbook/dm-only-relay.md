@@ -8,10 +8,10 @@ A relay that serves NIP-04 direct messages and the two utility kinds needed to
 operate them, and nothing else. Everything is authenticated, everything expires,
 and a message is only ever readable by its author and its recipient.
 
-The wiring lives in [`examples/bkind/main.go`](../examples/bkind/main.go); this
+The wiring lives in `examples/bkind/main.go`; this
 page records the specification, the khatru behaviour that had to change to meet
 it, and the reasons behind each policy. For running it on a server, see
-[deploying a relay](./deploying.md).
+[deploying a relay](./deploying.md) or [deploying with Docker](./docker.md).
 
 Status: implemented on branch `complex/bkind`.
 
@@ -270,4 +270,4 @@ variables (`-url`, `-addr`, `-db`, `-sweep-interval`, `-max-expiration`,
   and `DMCountPolicy` refuses everything else.
 - **The store defaults to in-memory.** Without `-db` the example uses
   `slicestore`, so nothing survives a restart. Give it a directory to use badger;
-  see [deploying a relay](./deploying.md).
+  see [deploying a relay](./deploying.md) or [deploying with Docker](./docker.md).
