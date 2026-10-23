@@ -16,7 +16,9 @@ client ──wss──> Caddy (443, TLS) ──ws──> bkind (127.0.0.1:3334) 
 ```
 
 The relay itself never talks to the internet: it binds to loopback, TLS and the
-public port belong to the proxy. That keeps certificate handling, HTTP/1.1
+public port belong to the proxy. If you would rather not install Go on the
+server, the same stack is available as a container image and a compose file:
+see section 6. That keeps certificate handling, HTTP/1.1
 websocket upgrades and slow-client timeouts in one place.
 
 ## 1. Prerequisites
@@ -216,7 +218,67 @@ sudo journalctl -u bkind -f
 
 At this point the relay answers on loopback; it is not publicly reachable yet.
 
-## 6. TLS proxy
+## 6. Containers instead of systemd
+
+Steps 2 to 5 have container equivalents, and they are checked in:
+
+- `examples/bkind/Dockerfile` — two stages, `CGO_ENABLED=0`, ends in `scratch`
+  with no shell and no libc. The result is ~15MB and has nothing to patch.
+- `examples/bkind/docker-compose.yml` — the relay plus an optional Caddy profile.
+- `examples/bkind/Caddyfile` — the TLS front end that profile mounts.
+- `examples/bkind/.env.example` — copy to `.env`.
+
+```sh
+cd examples/bkind
+cp .env.example .env
+docker compose up -d --build
+
+curl -sS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/ | jq .supported_nips
+```
+
+With TLS termination and certificates handled inside the stack:
+
+```sh
+# .env:  BKIND_URL=wss://dm.example.com
+#        BKIND_DOMAIN=dm.example.com
+docker compose --profile tls up -d --build
+```
+
+`BKIND_DOMAIN` is required for the profile (compose refuses to start without it)
+and must match `BKIND_URL`'s host.
+
+Container-specific things worth knowing before you rely on it:
+
+- **Never scale it.** `--scale bkind=2` makes the second container fail its badger
+  `LOCK`, and the rate limiters keep their counters in memory, so replicas would
+  limit independently anyway. One process, one volume.
+- **The volume owns the store, not a host directory.** `bkind-data` inherits
+  `/data`'s ownership (uid 65534) from the image, so it just works. A bind mount
+  arrives root-owned and the relay cannot open the database — `chown -R
+  65534:65534` it first, or keep the named volume.
+- **There is no healthcheck**, because the runtime image is `scratch` and cannot
+  run a probe. Use the NIP-11 `GET` above from the host, or from a separate
+  container.
+- **`read_only: true`** is set on the service: `/data` is the only writable path,
+  with a small tmpfs on `/tmp`. If you add a feature that writes elsewhere, mount
+  that path explicitly.
+- **`stop_grace_period: 30s`** matters: the relay stops accepting on `SIGTERM` and
+  drains for up to 15s before closing the store, which is longer than docker's 10s
+  default.
+- **ACME state** (account key, issued certificates) for the `tls` profile lives in
+  the `caddy-data` volume. Lose it and Caddy re-requests certificates, which can
+  hit Let's Encrypt rate limits if you do it repeatedly.
+
+Backups under compose are a volume copy, and the same 75h caveat applies:
+
+```sh
+docker compose stop bkind
+docker run --rm -v bkind_bkind-data:/data:ro -v "$PWD":/backup alpine \
+  tar -C /data -czf /backup/bkind-$(date +%F).tar.gz .
+docker compose start bkind
+```
+
+## 7. TLS proxy
 
 ### Caddy (recommended, certificates are automatic)
 
@@ -281,7 +343,7 @@ server {
 Get certificates with `sudo certbot --nginx -d dm.example.com` if not already
 wired up.
 
-## 7. Firewall
+## 8. Firewall
 
 ```sh
 sudo ufw allow OpenSSH
@@ -293,7 +355,7 @@ sudo ufw status verbose
 
 Port 3334 stays closed; it is bound to loopback.
 
-## 8. Verify
+## 9. Verify
 
 NIP-11 document:
 
@@ -354,7 +416,7 @@ variable, `systemctl restart bkind`.
 Persistence check: publish an event, `sudo systemctl restart bkind`, read it
 again. If it is gone, `BKIND_DB` is unset or not writable.
 
-## 9. Operations
+## 10. Operations
 
 **Logs.** Everything goes to the journal, including badger's INFO lines.
 
@@ -366,7 +428,7 @@ journalctl -u bkind --since '1 hour ago' | grep -i error
 Cap the journal in `/etc/systemd/journald.conf` (`SystemMaxUse=500M`) if the box
 is small, then `sudo systemctl restart systemd-journald`.
 
-**Upgrading.**
+**Upgrading.** (Under compose: `docker compose up -d --build` instead.)
 
 ```sh
 sudo systemctl stop bkind
@@ -400,7 +462,7 @@ out running two replicas on the same volume, and the rate limiters keep their
 counters in memory, so a second instance would enforce limits independently.
 Scale up, not out.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause |
 |---|---|
