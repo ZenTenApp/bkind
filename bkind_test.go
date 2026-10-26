@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -71,8 +73,15 @@ func (s *testStore) QueryEvents(ctx context.Context, filter nostr.Filter) (chan 
 	return out, nil
 }
 
-// The relay wired here mirrors examples/bkind/main.go. Keep the two in sync.
+// The relay wired here is examples/bkind/main.go: the reference config, wired by
+// the same call. There is nothing to keep in sync by hand anymore.
 func newBKindRelay(t *testing.T, serviceURL string) (*bkind.Relay, *testStore) {
+	return newRelayWithConfig(t, serviceURL, func(c *policies.Config) {})
+}
+
+// newRelayWithConfig wires the reference relay and lets a test adjust the policy
+// set before it is applied, which is how the config-driven behaviour is tested.
+func newRelayWithConfig(t *testing.T, serviceURL string, mutate func(*policies.Config)) (*bkind.Relay, *testStore) {
 	t.Helper()
 
 	relay := bkind.NewRelay()
@@ -88,37 +97,15 @@ func newBKindRelay(t *testing.T, serviceURL string) (*bkind.Relay, *testStore) {
 	relay.CountEvents = append(relay.CountEvents, store.CountEvents)
 	relay.DeleteEvent = append(relay.DeleteEvent, store.DeleteEvent)
 
-	relay.RejectEvent = append(relay.RejectEvent,
-		policies.RestrictToSpecifiedKinds(false, policies.DMKindAllowlist...),
-		policies.RequireAuthedAuthor,
-		policies.RequireExpiration(75*time.Hour),
-		policies.RequireTag("client"),
-		policies.MaxContentLen(4096),
-		policies.TagShapeLimits(16, 64, 256),
-		policies.ValidateKind4Shape,
-		policies.ValidateKind5Shape,
-		policies.ValidateKind62Shape,
-	)
-
-	relay.OverwriteFilter = append(relay.OverwriteFilter, func(ctx context.Context, filter *nostr.Filter) {
-		if len(filter.Kinds) == 0 {
-			filter.Kinds = []int{4, 5, 62}
-		}
-	})
-
-	relay.RejectFilter = append(relay.RejectFilter,
-		policies.MustAuth,
-		policies.DMReadPolicy,
-		policies.NoEmptyFilters,
-		policies.NoSearchQueries,
-	)
-
-	relay.RejectCountFilter = append(relay.RejectCountFilter,
-		policies.MustAuth,
-		policies.DMCountPolicy,
-	)
-
-	relay.PreventBroadcast = append(relay.PreventBroadcast, policies.DMBroadcastGuard)
+	cfg := policies.DefaultConfig()
+	// the tests speak far faster than the production limits allow
+	cfg.RateLimits = nil
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	if err := cfg.Wire(relay); err != nil {
+		t.Fatalf("failed to wire the relay: %v", err)
+	}
 
 	return relay, store
 }
@@ -853,6 +840,13 @@ func TestBKindNIP11(t *testing.T) {
 	if !info.Limitation.AuthRequired || !info.Limitation.RestrictedWrites {
 		t.Fatalf("NIP-11 does not advertise authentication: %+v", info.Limitation)
 	}
+	// the store wires CountEvents, so the framework would advertise NIP-45 on its
+	// own; this relay refuses every COUNT, so it must not
+	for _, advertised := range info.SupportedNIPs {
+		if advertised == float64(45) {
+			t.Fatalf("NIP-11 advertises NIP-45 while every COUNT is refused: %v", info.SupportedNIPs)
+		}
+	}
 	for _, nip := range []any{float64(4), float64(9), float64(42), float64(62)} {
 		found := false
 		for _, advertised := range info.SupportedNIPs {
@@ -909,4 +903,94 @@ func TestBKindExpirationSweepOnStartup(t *testing.T) {
 	}
 
 	t.Fatal("the startup scan left an expired event in the store")
+}
+
+// The kind set is configuration, not code: adding a kind to the allowlist is enough
+// for the relay to serve it end to end, and removing one makes it reject the REQ with
+// a reason the client can act on instead of returning a silent empty EOSE.
+func TestBKindKindsAreConfigurable(t *testing.T) {
+	relay, _ := newRelayWithConfig(t, "", func(c *policies.Config) {
+		c.Kinds.Allowed = []uint16{4, 5, 62, 1}
+		c.Kinds.AuthorOnly = []uint16{5, 62, 1}
+		c.Validation.ShapeKinds = []uint16{4, 5, 62}
+	})
+	server := httptest.NewServer(relay)
+	defer server.Close()
+
+	alice := dial(t, server.URL)
+	alice.authenticate()
+
+	note := &nostr.Event{
+		CreatedAt: nostr.Now(),
+		Kind:      1,
+		Tags: nostr.Tags{
+			expirationTag(time.Hour),
+			{"client", "bkind-test"},
+		},
+		Content: "a note, on a relay configured to serve it",
+	}
+	if err := note.Sign(alice.sk); err != nil {
+		t.Fatalf("failed to sign: %v", err)
+	}
+	if res := alice.publishAuthed(note); !res.OK {
+		t.Fatalf("the configured kind was refused: %q", res.Reason)
+	}
+
+	events, closed := alice.query(nostr.Filter{Kinds: []int{1}, Authors: []string{alice.pk}})
+	if closed != "" {
+		t.Fatalf("the author could not read their own note: %s", closed)
+	}
+	if len(events) != 1 || events[0].ID != note.ID {
+		t.Fatalf("the configured kind is not served on read: %d events", len(events))
+	}
+
+	// a kind that stayed out of the allowlist is rejected, not silently dropped
+	if _, closed := alice.query(nostr.Filter{Kinds: []int{7}, Authors: []string{alice.pk}}); !strings.Contains(closed, "not served") {
+		t.Fatalf("a REQ for an unserved kind should be refused with a reason, got %q", closed)
+	}
+}
+
+// A relay whose kinds come from a JSON document and environment variables ends up
+// wired, not just parsed.
+func TestBKindConfigFileWiresTheRelay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "relay.json")
+	if err := os.WriteFile(path, []byte(`{
+		"kinds": {"allowed": [4], "recipient_visible": [4], "author_only": []},
+		"tags": {"required": ["client"], "max": 8},
+		"content": {"max": 64},
+		"validation": {"shape_kinds": [4]},
+		"rate_limits": []
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := policies.LoadConfig(func(key string) (string, bool) {
+		if key == "BKIND_CONFIG" {
+			return path, true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("failed to load %s: %v", path, err)
+	}
+
+	relay := bkind.NewRelay()
+	if err := cfg.Wire(relay); err != nil {
+		t.Fatalf("failed to wire: %v", err)
+	}
+	server := httptest.NewServer(relay)
+	defer server.Close()
+
+	alice := dial(t, server.URL)
+	alice.authenticate()
+
+	if res := alice.publishAuthed(dmEvent(t, alice.sk, alice.pk, strings.Repeat("x", 65))); res.OK || !strings.Contains(res.Reason, "too large") {
+		t.Fatalf("the JSON content limit is not enforced: ok=%v reason=%q", res.OK, res.Reason)
+	}
+
+	// kind 5 is no longer served
+	if _, closed := alice.query(nostr.Filter{Kinds: []int{5}, Authors: []string{alice.pk}}); !strings.Contains(closed, "not served") {
+		t.Fatalf("kind 5 is still served after the allowlist dropped it: %q", closed)
+	}
 }

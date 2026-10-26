@@ -51,13 +51,13 @@ orphans an operator's config, logs, unit file or volume.
 
 | Surface | Value | Why frozen |
 |---|---|---|
-| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_MAX_EXPIRATION`, `BKIND_MAX_CONTENT`, `BKIND_MAX_TAGS` | an operator's `.env` and systemd `EnvironmentFile` |
+| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_CONFIG`, `BKIND_CONFIG_JSON`, `BKIND_CONFIG_STRICT`, `BKIND_KINDS`, `BKIND_MAX_EXPIRATION`, `BKIND_REQUIRE_EXPIRATION`, `BKIND_REQUIRED_TAGS`, `BKIND_MAX_CONTENT`, `BKIND_MAX_TAGS`, `BKIND_MAX_TAG_NAME`, `BKIND_MAX_TAG_VALUE`, `BKIND_REQUIRE_AUTH`, `BKIND_REJECT_COUNT`, `BKIND_NEGENTROPY`, `BKIND_NAME`, `BKIND_DESCRIPTION` | an operator's `.env` and systemd `EnvironmentFile` |
 | Log prefix | `[bkind]` | what people grep in journals |
 | systemd unit | `bkind.service` | `systemctl` name in every runbook |
 | Config dir | `/etc/bkind/` | |
 | State dir | `/var/lib/bkind/` | `StateDirectory=bkind` |
 | Compose volume | `bkind-data` → `bkind_bkind-data` | renaming the project orphans existing stores |
-| CLI flags | `-addr -url -db -sweep-interval -max-expiration -max-content -max-tags -version` | deliberately unprefixed; no brand in flag names |
+| CLI flags | `-addr -url -db -sweep-interval -kinds -max-expiration -require-expiration -required-tags -max-content -max-tags -max-tag-name -max-tag-value -require-auth -reject-count -negentropy -name -description -print-config -version` | deliberately unprefixed; no brand in flag names |
 
 ### 4. Provenance — not ours
 
@@ -107,10 +107,10 @@ the protocol:
 
 | Label | Location |
 |---|---|
-| NIP-11 `name` / `description` | `examples/bkind/main.go`, `relay.Info.*` |
+| NIP-11 `name` / `description` | `policies.Config.NIP11`, defaulted in `policies.DefaultConfig()`, derived from the kind list when the description is empty |
 | NIP-11 `software` / `version` defaults | `relay.go`, `NewRelay()` — currently the upstream URL and `"n/a"`; the product overrides these later |
 | Log prefix default | `relay.go` (`[khatru-relay]` until the module rename), overridden by the product |
-| Env var names | `examples/bkind/main.go`, `envOr(...)` calls |
+| Env var names | `policies.LoadConfig` / `ApplyEnv` (`policies/config.go`), plus `envOr(...)` in `examples/bkind/main.go` for the process settings |
 | Unit, dirs, volume | `docs/cookbook/deploying.md`, `examples/bkind/docker-compose.yml` |
 | Prose | `docs/`, `README.md` |
 | Rewrite tool | `scripts/rename-khatru.sh` |

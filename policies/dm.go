@@ -13,7 +13,18 @@ import (
 // DMKindAllowlist is the set of kinds served by a relay that only exists to carry
 // NIP-04 direct messages: Kind 4 itself, NIP-09 deletions and NIP-62 vanish
 // requests, both of which are needed to make a DM deletable.
+//
+// It is documentation now: the DM* policies below read dmKindRules, and a relay built
+// from a policies.Config reads that config, so mutating this variable changes nothing.
+// Use Config.Kinds (or BKIND_KINDS) to change what is served.
 var DMKindAllowlist = []uint16{4, 5, 62}
+
+// dmKindRules is DMKindAllowlist with the visibility classes that go with it. The
+// DM* policies below are thin wrappers around these methods kept for callers that
+// wired khatru by hand; a relay built from a policies.Config uses the Config directly
+// (see Config.Wire), so the write gate, the read gate, COUNT, live delivery and
+// NIP-11 all read the same value.
+var dmKindRules = DefaultConfig().Kinds
 
 // DMReadPolicy is the read policy for a direct-message relay.
 //
@@ -27,63 +38,17 @@ var DMKindAllowlist = []uint16{4, 5, 62}
 // An empty kinds list means "every kind" and is treated as the strictest case. A
 // filter asking for a kind outside the allowlist is rejected instead of being
 // silently narrowed, so clients notice that they are talking to the wrong relay.
+//
+// This is KindRules.ReadFilter with the DM kind set; use KindRules directly to serve
+// a different set.
 func DMReadPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
-	authed := bkind.GetAuthed(ctx)
-	if authed == "" {
-		return true, "auth-required: this relay only serves encrypted messages to authenticated users (NIP-42)"
-	}
-
-	var matchesDM, matchesAuthorOnly bool
-	if len(filter.Kinds) == 0 {
-		matchesDM = true
-		matchesAuthorOnly = true
-	}
-	for _, kind := range filter.Kinds {
-		switch uint16(kind) {
-		case 4:
-			matchesDM = true
-		case 5, 62:
-			matchesAuthorOnly = true
-		default:
-			return true, fmt.Sprintf("restricted: kind %d is not served by this relay", kind)
-		}
-	}
-
-	sendersPinned := len(filter.Authors) > 0
-	for _, author := range filter.Authors {
-		if author != authed {
-			sendersPinned = false
-		}
-	}
-	receiversPinned := len(filter.Tags["p"]) > 0
-	for _, receiver := range filter.Tags["p"] {
-		if receiver != authed {
-			receiversPinned = false
-		}
-	}
-
-	if matchesAuthorOnly {
-		// deletions and vanish requests are only meaningful to the key that made them
-		if !sendersPinned {
-			return true, "restricted: deletions and vanish requests are only readable by their author, pin \"authors\" to your own pubkey"
-		}
-		return false, ""
-	}
-
-	if matchesDM {
-		if !sendersPinned && !receiversPinned {
-			return true, "restricted: Kind 4 events are only visible to their author and their recipient, pin \"authors\" or \"#p\" to your own pubkey"
-		}
-		return false, ""
-	}
-
-	return true, "restricted: this relay only serves kinds 4, 5 and 62"
+	return dmKindRules.ReadFilter(ctx, filter)
 }
 
 // DMCountPolicy applies the same visibility rules to NIP-45 COUNT requests: a count
 // over direct messages leaks metadata even when no event is returned.
 func DMCountPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
-	return DMReadPolicy(ctx, filter)
+	return dmKindRules.RejectCount(ctx, filter)
 }
 
 // DMBroadcastGuard is a PreventBroadcast hook for a direct-message relay.
@@ -94,27 +59,7 @@ func DMCountPolicy(ctx context.Context, filter nostr.Filter) (bool, string) {
 // even though its REQ was rejected. It returns true to prevent the event from being
 // written to that connection.
 func DMBroadcastGuard(ws *bkind.WebSocket, evt *nostr.Event) bool {
-	authed := ws.AuthedPublicKey
-	if authed == "" {
-		return true
-	}
-
-	switch evt.Kind {
-	case 4:
-		if authed == evt.PubKey {
-			return false
-		}
-		for _, tag := range evt.Tags {
-			if len(tag) > 1 && tag[0] == "p" && tag[1] == authed {
-				return false
-			}
-		}
-		return true
-	case 5, 62:
-		return authed != evt.PubKey
-	}
-
-	return true
+	return dmKindRules.PreventBroadcast(ws, evt)
 }
 
 // RequireAuthedAuthor requires NIP-42 authentication for writes and that the

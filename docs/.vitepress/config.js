@@ -31,6 +31,7 @@ export default {
           { text: 'Custom Stores', link: '/cookbook/custom-stores' },
           { text: 'Using something like Google Drive', link: '/cookbook/google-drive' },
           { text: 'B Kind: a Kind-4-Only DM Relay', link: '/cookbook/dm-only-relay' },
+          { text: 'Configuring a Relay', link: '/cookbook/configuration' },
           { text: 'Deploying a Relay on Ubuntu', link: '/cookbook/deploying' },
           { text: 'Deploying with Docker', link: '/cookbook/docker' },
         ]
