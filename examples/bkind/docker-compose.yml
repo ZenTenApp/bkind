@@ -23,9 +23,10 @@ services:
       BKIND_ADDR: ":3334"
       BKIND_DB: /data
       BKIND_SWEEP_INTERVAL: ${BKIND_SWEEP_INTERVAL:-5m}
-      BKIND_MAX_EXPIRATION: ${BKIND_MAX_EXPIRATION:-75h}
-      BKIND_MAX_CONTENT: ${BKIND_MAX_CONTENT:-4096}
-      BKIND_MAX_TAGS: ${BKIND_MAX_TAGS:-16}
+      # the policy set is the binary's default (a Kind-4 DM relay); set BKIND_CONFIG
+      # to a JSON file and mount it to change kinds, limits or rate limits
+      #BKIND_CONFIG: /etc/bkind/bkind.json
+      #BKIND_CONFIG_JSON: ${BKIND_CONFIG_JSON:-}
 
     # loopback only: TLS and the public port belong to Caddy (see the tls profile)
     ports:
@@ -39,6 +40,7 @@ services:
     # single process: never `docker compose up --scale bkind=2`.
     volumes:
       - bkind-data:/data
+      #- ./bkind.json:/etc/bkind/bkind.json:ro
 
     # nothing outside /data is written by the relay
     read_only: true

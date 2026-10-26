@@ -19,7 +19,7 @@ Status: implemented on branch `complex/bkind`.
 
 | Requirement | Rule |
 |---|---|
-| Kinds | `{4, 5, 62}` only, no ephemeral |
+| Kinds | `{4, 5, 62}` only, no ephemeral (`kinds.allowed` in the config) |
 | Payload size | `len(content) <= 4096` bytes |
 | Frame backstop | `MaxMessageSize ~= 12KB` (websocket read limit, not a check) |
 | Expiration | mandatory, exactly one tag, `now < expiration <= now + 75h` |
@@ -41,7 +41,10 @@ is **not** used (its 2-per-3-minutes event limit contradicts our numbers).
 
 1. **Content is capped at 4096 bytes**, not the serialized event. Tags and JSON
    overhead live inside the websocket frame limit only.
-2. **Kinds `{4, 5, 62}`.** Kind 5 lets a sender delete their own DM. Kind 62 is
+2. **Kinds `{4, 5, 62}`.** The set is `kinds.allowed` in
+   `policies.DefaultConfig`, not a literal in the wiring, and the write gate, the filter
+   rewrite, reads, `COUNT`, live delivery and NIP-11 all derive from it — see
+   [Configuring a relay](./configuration.md). Kind 5 lets a sender delete their own DM. Kind 62 is
    the "request to vanish" counterpart: purge the identity's whole footprint.
    No social kinds (0, 1, 3, 6, 7, 9735): they leak the social graph of a relay
    whose only purpose is private conversation. No NIP-17 seals or gift wraps
@@ -181,16 +184,24 @@ websocket.
 
 ## The policy set
 
-`policies/dm.go`:
+`policies/kinds.go`:
 
-- `DMKindAllowlist` — `{4, 5, 62}`.
-- `DMReadPolicy` — deny by default; require auth; a kind outside the allowlist is
+- `KindRules` — the allowlist plus the two visibility classes. Every gate is a method on
+  it: `RestrictKind` (write), `OverwriteFilters` (filter rewrite), `ReadFilter` (read),
+  `RejectCount` (`COUNT`) and `PreventBroadcast` (live delivery).
+- `ReadFilter` — deny by default; require auth; a kind outside the allowlist is
   rejected rather than narrowed, so a client notices it is on the wrong relay;
-  empty `Kinds` counts as "every kind", the strictest case; kinds 4 needs
-  `authors` or `p` pinned to the authed key; 5 and 62 need `authors == [authed]`.
-- `DMCountPolicy` — the same rule for `RejectCountFilter`.
-- `DMBroadcastGuard` — `PreventBroadcast`: Kind 4 to its author or its `p`, 5 and
-  62 to their author only, anything else never.
+  empty `Kinds` counts as "every kind", the strictest case; a recipient-visible kind
+  needs `authors` or `p` pinned to the authed key; an author-only kind needs
+  `authors == [authed]`.
+- `RejectCount` — the same rule for `RejectCountFilter`.
+- `PreventBroadcast` — recipient-visible to its author or its `p`, author-only to its
+  author, a kind that is not served never.
+- `ShapeValidator` — the per-kind structural validator registry (`4`, `5`, `62`).
+
+`policies/dm.go` keeps `DMKindAllowlist`, `DMReadPolicy`, `DMCountPolicy` and
+`DMBroadcastGuard` as thin wrappers over the DM `KindRules` for code that wired khatru
+by hand.
 - `RequireAuthedAuthor` — `auth-required:` when unauthenticated (which is what
   triggers the NIP-42 challenge), `blocked:` when the authed key is not the
   author, silent pass for internal calls.
@@ -206,30 +217,41 @@ is unexported, so a per-npub REQ limit could not be built outside the package.
 
 ## Wiring
 
+`examples/bkind/main.go` no longer lists policies. It loads a `policies.Config` (defaults,
+then `BKIND_CONFIG`, then `BKIND_*`, then flags) and calls one function:
+
+```go
+if err := cfg.Wire(relay); err != nil { ... }
+```
+
+`Wire` installs, in this order:
+
 `RejectEvent`:
 
 ```go
-policies.RestrictToSpecifiedKinds(false, policies.DMKindAllowlist...),
-policies.RequireAuthedAuthor,
-policies.RequireExpiration(maxExpiration),
-policies.RequireTag("client"),
-policies.MaxContentLen(maxContentLen),
-policies.TagShapeLimits(maxTags, maxTagNameLen, maxTagValueLen),
-policies.ValidateKind4Shape,
-policies.ValidateKind5Shape,
-policies.ValidateKind62Shape,
+c.Kinds.RestrictKind(),
+c.Auth.Required ? policies.RequireAuthedAuthor : nothing,
+c.Expiration.Required ? policies.RequireExpiration(c.Expiration.MaxDuration()) : nothing,
+policies.RequireTag(name) for each c.Tags.Required,
+policies.MaxContentLen(c.Content.Max),
+policies.TagShapeLimits(c.Tags.Max, c.Tags.MaxNameLen, c.Tags.MaxValueLen),
+policies.ShapeValidator(kind) for each c.Validation.ShapeKinds,
+the per-npub and per-ip event limiters from c.RateLimits,
 ```
 
-`OverwriteFilter` bounds empty `Kinds` to the allowlist; `RejectFilter` is
-`MustAuth`, `DMReadPolicy`, `NoEmptyFilters`, `NoSearchQueries` plus the per-npub
-and per-ip limiters; `RejectCountFilter` is `MustAuth`, `DMCountPolicy`;
-`PreventBroadcast` is `DMBroadcastGuard`; `RejectConnection` is
-`ConnectionRateLimiter`. Rate limits run at 1h and 1d windows, per npub and per
-ip.
+`OverwriteFilter` is `c.Kinds.OverwriteFilters()`; `RejectFilter` is `MustAuth` (when
+required), `c.Kinds.ReadFilter`, `NoEmptyFilters`, `NoSearchQueries` plus the filter
+limiters; `RejectCountFilter` is `MustAuth`, `c.Kinds.RejectCount`; `PreventBroadcast` is
+`c.Kinds.PreventBroadcast`; `RejectConnection` is the connection limiters. The NIP-11
+document is derived from the same config, including `supported_nips`.
+
+The store, `ServiceURL`, `MaxMessageSize`, the expiration sweep interval and the HTTP
+server stay explicit in `main.go` — they are structure, not policy.
 
 ## Tests
 
-- `bkind_test.go` wires the example's policy set and drives it over a real
+- `bkind_test.go` wires the reference config (`policies.DefaultConfig()`, rate limits
+  off) and drives it over a real
   websocket: the NIP-42 challenge round trip, authorship binding, the whole
   `RejectEvent` table (kind, content size, expiration, client tag, tag shape,
   Kind 4 structure), the read matrix (author, recipient, third party,
@@ -247,9 +269,10 @@ Run everything with:
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-The example takes its settings from flags that default to `BKIND_*` environment
-variables (`-url`, `-addr`, `-db`, `-sweep-interval`, `-max-expiration`,
-`-max-content`, `-max-tags`); the deployment page has the table.
+The example reads its settings from `BKIND_*` environment variables and flags
+(`-url`, `-addr`, `-db`, `-sweep-interval`, `-kinds`, `-max-expiration`,
+`-max-content`, `-max-tags`, …), and from a JSON policy file named by `BKIND_CONFIG`.
+[Configuring a relay](./configuration.md) has the full table.
 
 ## Accepted consequences
 

@@ -3,6 +3,10 @@
 // (NIP-62). Everything is authenticated, everything expires, and a message is only
 // ever readable by its author and its recipient.
 //
+// The policy set is data, not code: it comes from policies.DefaultConfig, optionally
+// overridden by the JSON file named in BKIND_CONFIG (or BKIND_CONFIG_JSON), then by
+// the BKIND_* variables below, then by flags. See policies.Config for the fields.
+//
 // See docs/cookbook/dm-only-relay.md for the reasoning behind each policy,
 // docs/cookbook/deploying.md for running it on a server, and
 // docs/cookbook/docker.md for the container path.
@@ -28,38 +32,39 @@ import (
 	"github.com/fiatjaf/eventstore/badger"
 	"github.com/fiatjaf/eventstore/slicestore"
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
 	"github.com/nbd-wtf/go-nostr/nip40"
 )
 
-// Limits of the relay. The defaults can be changed with the flags below; the
-// deployment guide runs them from an environment file.
-const (
-	defaultMaxContentLen  = 4096
-	defaultMaxTags        = 16
-	defaultMaxTagNameLen  = 64
-	defaultMaxTagValueLen = 256
-	defaultMaxExpiration  = 75 * time.Hour
-	defaultSweepInterval  = 5 * time.Minute
-
-	// the websocket frame limit is only a backstop: the real limit is enforced on
-	// the content by policies.MaxContentLen, so that a client gets a NAK instead of
-	// a closed connection
-	maxMessageBytes = 12 * 1024
-)
+// Limits of the relay. The defaults live in policies.DefaultConfig; these are the
+// ones the process itself needs and that are not part of the policy set.
+// defaultSweepInterval is the only process setting that is not part of the policy
+// set.
+const defaultSweepInterval = 5 * time.Minute
 
 type config struct {
 	addr          string
 	serviceURL    string
 	dbPath        string // empty means an in-memory store, for local testing
 	sweepInterval time.Duration
-	maxContentLen int
-	maxExpiration time.Duration
-	maxTags       int
+	policies      policies.Config
+	printConfig   bool // dump the resolved policy set and exit
 }
 
 func main() {
 	cfg := parseConfig()
+
+	if cfg.printConfig {
+		// the effective policy set, after defaults, file, environment and flags. It
+		// is the canonical document: feeding it back through BKIND_CONFIG_STRICT
+		// reproduces exactly this configuration, which is what makes an explicit
+		// file reviewable instead of aspirational.
+		document, err := cfg.policies.JSON()
+		if err != nil {
+			log.Fatalf("failed to render the configuration: %v", err)
+		}
+		fmt.Println(string(document))
+		return
+	}
 
 	relay, closer, err := newRelay(cfg)
 	if err != nil {
@@ -76,9 +81,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	retention := "no expiration required"
+	if cfg.policies.Expiration.Required {
+		retention = fmt.Sprintf("expiration <= %s", cfg.policies.Expiration.MaxDuration())
+	}
+
 	go func() {
-		log.Printf("listening on %s, serving %s (kinds 4/5/62, content <= %d bytes, expiration <= %s)",
-			cfg.addr, cfg.serviceURL, cfg.maxContentLen, cfg.maxExpiration)
+		log.Printf("listening on %s, serving %s (kinds %s, content <= %d bytes, %s)",
+			cfg.addr, cfg.serviceURL, kindList(cfg.policies.Kinds), cfg.policies.Content.Max, retention)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server failed: %v", err)
 		}
@@ -98,41 +108,98 @@ func main() {
 }
 
 func parseConfig() config {
+	// defaults, then BKIND_CONFIG / BKIND_CONFIG_JSON, then the scalar BKIND_*
+	// variables, validated
+	policySet, err := policies.LoadConfig(os.LookupEnv)
+	if err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
 	addr := envOr("BKIND_ADDR", ":3334")
 	serviceURL := envOr("BKIND_URL", "")
 	dbPath := envOr("BKIND_DB", "")
 	sweepInterval := envOr("BKIND_SWEEP_INTERVAL", defaultSweepInterval.String())
-	maxExpiration := envOr("BKIND_MAX_EXPIRATION", defaultMaxExpiration.String())
-	maxContentLen := envOr("BKIND_MAX_CONTENT", strconv.Itoa(defaultMaxContentLen))
-	maxTags := envOr("BKIND_MAX_TAGS", strconv.Itoa(defaultMaxTags))
+	kinds := strings.Join(kindListInts(policySet.Kinds.Allowed), ",")
+	maxExpiration := policySet.Expiration.Max
+	requiredTags := strings.Join(policySet.Tags.Required, ",")
+	maxContentLen := strconv.Itoa(policySet.Content.Max)
+	maxTags := strconv.Itoa(policySet.Tags.Max)
+	maxTagNameLen := strconv.Itoa(policySet.Tags.MaxNameLen)
+	maxTagValueLen := strconv.Itoa(policySet.Tags.MaxValueLen)
+	allowEphemeral := policySet.Kinds.AllowEphemeral
+	requireExpiration := policySet.Expiration.Required
+	requireAuth := policySet.Auth.Required
+	rejectCount := policySet.Count.Reject
+	negentropy := policySet.Negentropy
+	printConfig := false
+	nip11Name := policySet.NIP11.Name
+	nip11Description := policySet.NIP11.Description
 
 	flag.StringVar(&addr, "addr", addr, "address to listen on")
 	flag.StringVar(&serviceURL, "url", serviceURL, "public URL of this relay (wss://...), used for NIP-42 and NIP-62")
 	flag.StringVar(&dbPath, "db", dbPath, "path of the database directory (empty means in-memory, nothing is persisted)")
 	flag.StringVar(&sweepInterval, "sweep-interval", sweepInterval, "how often expired events are deleted")
+	flag.StringVar(&kinds, "kinds", kinds, "comma-separated kinds the relay serves")
 	flag.StringVar(&maxExpiration, "max-expiration", maxExpiration, "longest allowed NIP-40 expiration")
+	flag.BoolVar(&requireExpiration, "require-expiration", requireExpiration, "require the mandatory NIP-40 expiration tag")
+	flag.StringVar(&requiredTags, "required-tags", requiredTags, "comma-separated tags every event must carry exactly once (empty for none)")
 	flag.StringVar(&maxContentLen, "max-content", maxContentLen, "maximum content length in bytes")
 	flag.StringVar(&maxTags, "max-tags", maxTags, "maximum number of tags")
+	flag.StringVar(&maxTagNameLen, "max-tag-name", maxTagNameLen, "maximum tag name length in bytes")
+	flag.StringVar(&maxTagValueLen, "max-tag-value", maxTagValueLen, "maximum tag value length in bytes")
+	flag.BoolVar(&allowEphemeral, "allow-ephemeral", allowEphemeral, "accept ephemeral kinds without listing them in -kinds")
+	flag.BoolVar(&requireAuth, "require-auth", requireAuth, "require NIP-42 authentication on reads and writes")
+	flag.BoolVar(&rejectCount, "reject-count", rejectCount, "refuse NIP-45 COUNT requests")
+	flag.BoolVar(&negentropy, "negentropy", negentropy, "enable NIP-77 negentropy set reconciliation")
+	flag.StringVar(&nip11Name, "name", nip11Name, "relay name in the NIP-11 document")
+	flag.StringVar(&nip11Description, "description", nip11Description, "relay description in the NIP-11 document (empty derives one from -kinds)")
+	flag.BoolVar(&printConfig, "print-config", false, "print the resolved policy set as JSON and exit")
 	flag.Parse()
 
 	cfg := config{
-		addr:       addr,
-		serviceURL: normalizeServiceURL(serviceURL),
-		dbPath:     dbPath,
+		addr:        addr,
+		serviceURL:  normalizeServiceURL(serviceURL),
+		dbPath:      dbPath,
+		policies:    policySet,
+		printConfig: printConfig,
 	}
 
-	var err error
 	if cfg.sweepInterval, err = time.ParseDuration(sweepInterval); err != nil || cfg.sweepInterval <= 0 {
 		log.Fatalf("invalid -sweep-interval %q", sweepInterval)
 	}
-	if cfg.maxExpiration, err = time.ParseDuration(maxExpiration); err != nil || cfg.maxExpiration <= 0 {
-		log.Fatalf("invalid -max-expiration %q", maxExpiration)
+
+	// flags win over the environment, so they are applied back onto the policy set
+	parsedKinds, err := parseKinds(kinds)
+	if err != nil {
+		log.Fatalf("invalid -kinds: %v", err)
 	}
-	if cfg.maxContentLen, err = strconv.Atoi(maxContentLen); err != nil || cfg.maxContentLen <= 0 {
+	cfg.policies.SetKinds(parsedKinds)
+
+	cfg.policies.Expiration.Required = requireExpiration
+	cfg.policies.Expiration.Max = maxExpiration
+	cfg.policies.Tags.Required = splitTags(requiredTags)
+	cfg.policies.Auth.Required = requireAuth
+	cfg.policies.Count.Reject = rejectCount
+	cfg.policies.Negentropy = negentropy
+	cfg.policies.NIP11.Name = nip11Name
+	cfg.policies.NIP11.Description = nip11Description
+
+	if cfg.policies.Content.Max, err = strconv.Atoi(maxContentLen); err != nil {
 		log.Fatalf("invalid -max-content %q", maxContentLen)
 	}
-	if cfg.maxTags, err = strconv.Atoi(maxTags); err != nil || cfg.maxTags <= 0 {
+	if cfg.policies.Tags.Max, err = strconv.Atoi(maxTags); err != nil {
 		log.Fatalf("invalid -max-tags %q", maxTags)
+	}
+	if cfg.policies.Tags.MaxNameLen, err = strconv.Atoi(maxTagNameLen); err != nil {
+		log.Fatalf("invalid -max-tag-name %q", maxTagNameLen)
+	}
+	if cfg.policies.Tags.MaxValueLen, err = strconv.Atoi(maxTagValueLen); err != nil {
+		log.Fatalf("invalid -max-tag-value %q", maxTagValueLen)
+	}
+
+	// re-validate: a flag can break an invariant the environment respected
+	if err := cfg.policies.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	return cfg
@@ -143,12 +210,14 @@ func parseConfig() config {
 func newRelay(cfg config) (*bkind.Relay, func(), error) {
 	relay := bkind.NewRelay()
 	relay.ServiceURL = cfg.serviceURL
-	relay.MaxMessageSize = maxMessageBytes
+	// the frame limit is only a backstop, and it is advertised, so it comes from the
+	// same field: the real limit on a message is policies.MaxContentLen, which NAKs
+	// instead of closing the connection
+	relay.MaxMessageSize = int64(cfg.policies.NIP11.MaxMessageLength)
 	relay.SetExpirationInterval(cfg.sweepInterval)
-	relay.Negentropy = false // set reconciliation would leak which event ids exist
 
 	closer := func() {}
-	store, err := openStore(cfg.dbPath)
+	store, err := openStore(cfg.dbPath, cfg.policies.NIP11.MaxLimit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -159,87 +228,12 @@ func newRelay(cfg config) (*bkind.Relay, func(), error) {
 	relay.CountEvents = append(relay.CountEvents, store.countEvents)
 	relay.DeleteEvent = append(relay.DeleteEvent, store.deleteEvent)
 
-	// ---------------------------------------------------------------- writes
-	relay.RejectEvent = append(relay.RejectEvent,
-		policies.RestrictToSpecifiedKinds(false, policies.DMKindAllowlist...),
-		policies.RequireAuthedAuthor,
-		policies.RequireExpiration(cfg.maxExpiration),
-		policies.RequireTag("client"),
-		policies.MaxContentLen(cfg.maxContentLen),
-		policies.TagShapeLimits(cfg.maxTags, defaultMaxTagNameLen, defaultMaxTagValueLen),
-		policies.ValidateKind4Shape,
-		policies.ValidateKind5Shape,
-		policies.ValidateKind62Shape,
-
-		// per npub: refill every hour, then a daily ceiling
-		policies.EventAuthedPubKeyRateLimiter(30, time.Hour, 60),
-		policies.EventAuthedPubKeyRateLimiter(200, 24*time.Hour, 400),
-		// per ip, for whatever arrives before it is authenticated
-		policies.EventIPRateLimiter(60, time.Hour, 120),
-		policies.EventIPRateLimiter(400, 24*time.Hour, 800),
-	)
-
-	// a filter without kinds means "every kind" to the store, so narrow it to the
-	// kinds this relay actually serves before anything else looks at it
-	relay.OverwriteFilter = append(relay.OverwriteFilter, func(ctx context.Context, filter *nostr.Filter) {
-		if len(filter.Kinds) == 0 {
-			filter.Kinds = []int{4, 5, 62}
-			return
-		}
-
-		kinds := make([]int, 0, len(filter.Kinds))
-		for _, kind := range filter.Kinds {
-			switch uint16(kind) {
-			case 4, 5, 62:
-				kinds = append(kinds, kind)
-			}
-		}
-		filter.Kinds = kinds
-		if len(kinds) == 0 {
-			filter.LimitZero = true // nothing to return, but stay subscribed
-		}
-	})
-
-	// ----------------------------------------------------------------- reads
-	relay.RejectFilter = append(relay.RejectFilter,
-		policies.MustAuth,
-		policies.DMReadPolicy,
-		policies.NoEmptyFilters,
-		policies.NoSearchQueries,
-
-		policies.FilterAuthedPubKeyRateLimiter(60, time.Hour, 120),
-		policies.FilterAuthedPubKeyRateLimiter(400, 24*time.Hour, 800),
-		policies.FilterIPRateLimiter(120, time.Hour, 240),
-		policies.FilterIPRateLimiter(800, 24*time.Hour, 1600),
-	)
-
-	// a COUNT over direct messages is a metadata leak even when no event is returned
-	relay.RejectCountFilter = append(relay.RejectCountFilter,
-		policies.MustAuth,
-		policies.DMCountPolicy,
-	)
-
-	// live delivery does not re-run the filter policies, so a wide subscription
-	// would otherwise receive Kind 4 events for the life of the connection
-	relay.PreventBroadcast = append(relay.PreventBroadcast, policies.DMBroadcastGuard)
-
-	relay.RejectConnection = append(relay.RejectConnection,
-		policies.ConnectionRateLimiter(120, time.Hour, 240),
-	)
-
-	// --------------------------------------------------------------- NIP-11
-	relay.Info.Name = "B Kind"
-	relay.Info.Description = "Kind 4 direct messages only. Authenticated, ephemeral (max 75h), size-limited."
-	relay.Info.SupportedNIPs = []any{4, 9, 11, 40, 42, 62}
-	relay.Info.Limitation = &nip11.RelayLimitationDocument{
-		MaxMessageLength: maxMessageBytes,
-		MaxEventTags:     cfg.maxTags,
-		MaxContentLength: cfg.maxContentLen,
-		MaxSubscriptions: 10,
-		MaxFilters:       4,
-		MaxLimit:         500,
-		AuthRequired:     true,
-		RestrictedWrites: true,
+	// one call installs every gate that decides which kinds are served — writes,
+	// filter overwrite, reads, COUNT, live delivery and NIP-11 — from the same
+	// config, so they cannot disagree
+	if err := cfg.policies.Wire(relay); err != nil {
+		store.close()
+		return nil, nil, err
 	}
 
 	return relay, closer, nil
@@ -255,7 +249,7 @@ type store struct {
 	close       func()
 }
 
-func openStore(path string) (store, error) {
+func openStore(path string, maxLimit int) (store, error) {
 	if path == "" {
 		log.Println("no -db given: using an in-memory store, everything is lost on restart")
 		ss := &slicestore.SliceStore{}
@@ -273,8 +267,9 @@ func openStore(path string) (store, error) {
 
 	db := &badger.BadgerBackend{
 		Path: path,
-		// keep the page size the NIP-11 document advertises
-		MaxLimit: 500,
+		// the page size the NIP-11 document advertises: a query limit above this
+		// would be truncated by the store after being promised by the document
+		MaxLimit: maxLimit,
 	}
 	if err := db.Init(); err != nil {
 		return store{}, fmt.Errorf("failed to open the database at %s: %w", path, err)
@@ -341,6 +336,52 @@ func normalizeServiceURL(raw string) string {
 	}
 
 	return strings.TrimSuffix(raw, "/")
+}
+
+// kindList renders a kind set for a log line.
+func kindList(k policies.KindRules) string {
+	parts := make([]string, 0, len(k.Allowed))
+	for _, kind := range k.Sorted() {
+		parts = append(parts, strconv.Itoa(int(kind)))
+	}
+	return strings.Join(parts, "/")
+}
+
+func kindListInts(kinds []uint16) []string {
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		parts = append(parts, strconv.Itoa(int(kind)))
+	}
+	return parts
+}
+
+func parseKinds(raw string) ([]uint16, error) {
+	kinds := make([]uint16, 0, 4)
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		kind, err := strconv.ParseUint(item, 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a kind number", item)
+		}
+		kinds = append(kinds, uint16(kind))
+	}
+	if len(kinds) == 0 {
+		return nil, fmt.Errorf("no kinds given")
+	}
+	return kinds, nil
+}
+
+func splitTags(raw string) []string {
+	tags := make([]string, 0, 2)
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			tags = append(tags, item)
+		}
+	}
+	return tags
 }
 
 func envOr(key, fallback string) string {

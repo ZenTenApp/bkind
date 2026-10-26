@@ -81,7 +81,9 @@ func RestrictToSpecifiedKinds(allowEphemeral bool, kinds ...uint16) func(context
 			return false, ""
 		}
 
-		return true, fmt.Sprintf("Kind %d events are not allowed on this relay", event.Kind)
+		// NIP-01 reasons should start with a machine-readable prefix; a client that
+		// has the wrong relay gets the same "blocked:" class as any other refusal
+		return true, fmt.Sprintf("blocked: Kind %d events are not allowed on this relay", event.Kind)
 	}
 }
 

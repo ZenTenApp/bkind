@@ -25,8 +25,8 @@ in [`examples/bkind/main.go`](./examples/bkind/main.go).
 
 | Requirement | Rule | Policy |
 |---|---|---|
-| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. | `RestrictToSpecifiedKinds(false, policies.DMKindAllowlist...)` |
-| **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `DMReadPolicy`, `DMBroadcastGuard`, `DMCountPolicy` |
+| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is `kinds.allowed` in the config, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `policies.KindRules`, fixed by `kinds.allowed` |
+| **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `KindRules.ReadFilter`, `KindRules.PreventBroadcast`, `KindRules.RejectCount` (the `DM*` functions are wrappers over the default kind set) |
 | **Mandatory expiration, max 75h** | Exactly one `expiration` tag, a unix timestamp, in the future and no further than 75 hours away. Expired events are filtered out of queries even before the background sweep deletes them. | `RequireExpiration(75 * time.Hour)` |
 | **Max size 4 KB** | `len(content) <= 4096` bytes. The limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `MaxContentLen(4096)` |
 | **Mandatory tags** | Exactly one non-empty `client` tag, and the mandatory `expiration` tag above. | `RequireTag("client")`, `RequireExpiration` |
@@ -122,25 +122,56 @@ BKIND_DB=./data go run ./examples/bkind # badger on disk, survives restarts
 
 It is the relay described above: authenticated Kind 4 messages, max 75 hours of
 retention, 4 KB of content, mandatory `expiration` and `client` tags, and the
-rate limits in the table. Configuration is by environment variable or flag:
+rate limits in the table. The whole policy set is data — `policies.Config` — and the
+relay loads it as defaults, then a JSON file, then environment variables, then flags:
+
+```bash
+BKIND_CONFIG=/etc/bkind/bkind.json go run ./examples/bkind   # a file
+BKIND_KINDS=4,5,62 BKIND_MAX_CONTENT=2048 go run ./examples/bkind # variables
+
+# an explicit configuration: the whole document, nothing inherited
+go run ./examples/bkind -print-config > bkind.json
+BKIND_CONFIG=bkind.json BKIND_CONFIG_STRICT=true go run ./examples/bkind
+```
 
 | Env | Flag | Default | Meaning |
 |---|---|---|---|
+| `BKIND_CONFIG` | — | *(empty)* | path to a JSON policy file; see [Configuring a relay](./docs/cookbook/configuration.md) |
+| `BKIND_CONFIG_JSON` | — | *(empty)* | the same document inline |
+| `BKIND_CONFIG_STRICT` | — | `false` | every field must be present in the file, so the relay does only what the file says |
 | `BKIND_ADDR` | `-addr` | `:3334` | listen address |
 | `BKIND_URL` | `-url` | *(empty)* | public `ws(s)://` URL; must match what clients connect to, used by NIP-42 and NIP-62 |
 | `BKIND_DB` | `-db` | *(empty)* | database directory; empty means in-memory and nothing is persisted |
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | how often expired events are deleted |
+| `BKIND_KINDS` | `-kinds` | `4,5,62` | comma-separated kinds the relay serves |
 | `BKIND_MAX_EXPIRATION` | `-max-expiration` | `75h` | longest allowed NIP-40 expiration |
+| `BKIND_REQUIRE_EXPIRATION` | `-require-expiration` | `true` | make the NIP-40 tag mandatory |
+| `BKIND_REQUIRED_TAGS` | `-required-tags` | `client` | comma-separated mandatory tags |
 | `BKIND_MAX_CONTENT` | `-max-content` | `4096` | maximum content length in bytes |
 | `BKIND_MAX_TAGS` | `-max-tags` | `16` | maximum number of tags |
+| `BKIND_MAX_TAG_NAME` | `-max-tag-name` | `64` | maximum tag name length in bytes |
+| `BKIND_MAX_TAG_VALUE` | `-max-tag-value` | `256` | maximum tag value length in bytes |
+| `BKIND_REQUIRE_AUTH` | `-require-auth` | `true` | NIP-42 on reads and writes |
+| `BKIND_REJECT_COUNT` | `-reject-count` | `true` | refuse NIP-45 `COUNT` |
+| `BKIND_NEGENTROPY` | `-negentropy` | `false` | NIP-77 set reconciliation |
+| `BKIND_NAME` | `-name` | `B Kind` | relay name in NIP-11 |
+| `BKIND_DESCRIPTION` | `-description` | *(derived)* | description in NIP-11; empty derives it from the kind list |
+| `BKIND_MAX_MESSAGE_LENGTH` | — | `12288` | advertised websocket frame limit |
+| `BKIND_MAX_SUBSCRIPTIONS` | — | `10` | advertised limit |
+| `BKIND_MAX_FILTERS` | — | `4` | advertised limit |
+| `BKIND_MAX_LIMIT` | — | `500` | advertised limit |
+
+Rate limits, the visibility classes (`recipient_visible`, `author_only`) and the kind
+shape validators are structured, so they live in the JSON file (or `BKIND_CONFIG_JSON`);
+every field is documented in [Configuring a relay](./docs/cookbook/configuration.md).
 
 The NIP-11 document it serves:
 
 ```json
 {
   "name": "B Kind",
-  "description": "Kind 4 direct messages only. Authenticated, ephemeral (max 75h), size-limited.",
-  "supported_nips": [4, 9, 11, 40, 42, 62, 45],
+  "description": "Kind 4 direct messages, Kind 5 deletions, Kind 62 vanish requests only.",
+  "supported_nips": [4, 9, 11, 40, 42, 62],
   "limitation": {
     "max_message_length": 12288,
     "max_event_tags": 16,
@@ -154,14 +185,16 @@ The NIP-11 document it serves:
 }
 ```
 
-`45` is advertised because the store's `CountEvents` is wired; `DMCountPolicy`
-still rejects every `COUNT` on this relay.
+The document is derived from the config: `supported_nips` gains `45` only when
+`count.reject` is `false`, and the description is generated from `kinds.allowed`, so
+neither can claim a feature this relay does not have.
 
 ## Documentation
 
 - [Why B Kind](./docs/why.md) — what the framework is for, and what people build with it
 - [Getting started](./docs/getting-started/index.md) — install, store, policies, routers
 - [The DM relay spec](./docs/cookbook/dm-only-relay.md) — every rule above, and the khatru behaviour that had to change to meet it
+- [Configuring a relay](./docs/cookbook/configuration.md) — the policy file, the environment variables, and how to serve a different kind set
 - [Deploying on Ubuntu](./docs/cookbook/deploying.md) and [with Docker](./docs/cookbook/docker.md)
 - [Naming rules](./NAMING.md) — what is called `B Kind`, `bkind`, `BKIND_*`, and what must never be renamed
 - API reference: [pkg.go.dev/github.com/ZenTenApp/bkind](https://pkg.go.dev/github.com/ZenTenApp/bkind)

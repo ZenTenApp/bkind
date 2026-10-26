@@ -114,9 +114,23 @@ passed `--auth`".
 `BKIND_URL`. Compose refuses to start the profile if it is unset. The file is
 already gitignored; `chmod 600 .env` if you like.
 
-Everything else (`BKIND_SWEEP_INTERVAL`, `BKIND_MAX_EXPIRATION`,
-`BKIND_MAX_CONTENT`, `BKIND_MAX_TAGS`) has a sane default baked into the image. See
-the [configuration table](./deploying.md#_4-configuration) for what each one means.
+Everything else has a sane default baked into the binary: the policy set is
+`policies.DefaultConfig` (a Kind-4 DM relay), and `BKIND_SWEEP_INTERVAL` is `5m`. See
+the [configuration table](./deploying.md#_4-configuration) for what each variable means,
+and [Configuring a relay](./configuration.md) for the JSON policy file.
+
+For anything structured — rate limits, which kinds are private to their recipient, the
+per-kind shape validators — mount a policy file and point `BKIND_CONFIG` at it:
+
+```yaml
+    environment:
+      BKIND_CONFIG: /etc/bkind/bkind.json
+    volumes:
+      - ./bkind.json:/etc/bkind/bkind.json:ro
+```
+
+`BKIND_CONFIG_JSON` does the same without a mount, for a compose file or a
+`docker run` line that should stay self-contained.
 
 ## 5. Start
 
@@ -150,7 +164,7 @@ curl -sS -H 'Accept: application/nostr+json' https://dm.example.com \
 
 ```json
 {
-  "nips": [4, 9, 11, 40, 42, 62, 45],
+  "nips": [4, 9, 11, 40, 42, 62],
   "lim": {
     "max_message_length": 12288,
     "max_event_tags": 16,
@@ -161,8 +175,9 @@ curl -sS -H 'Accept: application/nostr+json' https://dm.example.com \
 }
 ```
 
-`45` is there because B Kind adds it whenever `CountEvents` is wired; the relay only
-lets clients count their own messages.
+No `45`: the store wires `CountEvents`, but `count.reject` is `true`, so every
+`COUNT` is refused and the document does not advertise it. The list is derived from
+the config, so changing `count.reject` moves both together.
 
 Then the actual behaviour, with [`nak`](https://github.com/fiatjaf/nak)
 (`go install github.com/fiatjaf/nak@latest`):
@@ -187,8 +202,8 @@ nak req -k 4 -t p="$BPUB" --sec "$BOB" --auth "$RELAY"
 
 # 4. an outsider is refused
 nak req -k 4 -a "$APUB" --sec "$(nak key generate)" --auth "$RELAY"
-# -> CLOSED: restricted: Kind 4 events are only visible to their author and their
-#    recipient, pin "authors" or "#p" to your own pubkey
+# -> CLOSED: restricted: events of this kind are only visible to their author and
+#    their recipient, pin "authors" or "#p" to your own pubkey
 ```
 
 ## 7. Prove it persists

@@ -45,12 +45,13 @@ COPY --from=build /out/bkind /usr/local/bin/bkind
 COPY --from=build --chown=65534:65534 /out/data /data
 WORKDIR /data
 
+# only the process settings live here. The policy set (kinds, limits, rate limits)
+# is policies.DefaultConfig inside the binary, overridden by BKIND_CONFIG /
+# BKIND_CONFIG_JSON / BKIND_* — see docs/cookbook/configuration.md. Duplicating the
+# limits here would be a second source of truth that silently drifts.
 ENV BKIND_ADDR=:3334 \
     BKIND_DB=/data \
-    BKIND_SWEEP_INTERVAL=5m \
-    BKIND_MAX_EXPIRATION=75h \
-    BKIND_MAX_CONTENT=4096 \
-    BKIND_MAX_TAGS=16
+    BKIND_SWEEP_INTERVAL=5m
 
 # BKIND_URL has no default on purpose: NIP-42 auth events and NIP-62 vanish
 # requests are both matched against it, so a wrong value breaks writes silently.
