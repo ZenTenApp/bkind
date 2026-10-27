@@ -70,25 +70,25 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if got := cfg.Kinds.Whitelist; len(got) != 3 || got[0] != 4 || got[1] != 5 || got[2] != 62 {
 		t.Fatalf("default whitelist is %v, want [4 5 62]", got)
 	}
-	for _, kind := range []string{"4", "5", "62"} {
-		rule := cfg.Rules[kind]
+	for _, kind := range []uint16{4, 5, 62} {
+		rule := cfg.EffectiveRule(kind)
 		if rule == nil {
-			t.Fatalf("the default config has no rule for kind %s", kind)
+			t.Fatalf("the default config has no rule for kind %d", kind)
 		}
 		if !rule.RequireAuth || !rule.Read.Privileged {
-			t.Fatalf("kind %s must be authenticated and privileged: %+v", kind, rule)
+			t.Fatalf("kind %d must be authenticated and privileged: %+v", kind, rule)
 		}
 		if rule.MaxSize.Bytes != 4096 {
-			t.Fatalf("kind %s max_size is %d, want 4096", kind, rule.MaxSize.Bytes)
+			t.Fatalf("kind %d max_size is %d, want 4096", kind, rule.MaxSize.Bytes)
 		}
 		if rule.MaxExpiration.Duration != 75*time.Hour {
-			t.Fatalf("kind %s max_expiration is %v, want 75h", kind, rule.MaxExpiration.Duration)
+			t.Fatalf("kind %d max_expiration is %v, want 75h", kind, rule.MaxExpiration.Duration)
 		}
 		if len(rule.RequiredTags) != 2 || rule.RequiredTags[0] != "expiration" || rule.RequiredTags[1] != "client" {
-			t.Fatalf("kind %s required_tags are %v", kind, rule.RequiredTags)
+			t.Fatalf("kind %d required_tags are %v", kind, rule.RequiredTags)
 		}
 	}
-	if cfg.Rules["4"].PTag != "hex" {
+	if cfg.EffectiveRule(4).PTag != "hex" {
 		t.Fatal("kind 4 is the one kind with a p rule in the defaults")
 	}
 	if !cfg.Count.Reject || cfg.Negentropy {
@@ -114,7 +114,7 @@ func TestConfigFromJSONMerges(t *testing.T) {
 
 	// an existing rule is patched, not replaced: the fields the document does
 	// not name keep their value
-	rule4 := cfg.Rules["4"]
+	rule4 := cfg.EffectiveRule(4)
 	if rule4.MaxSize.Bytes != 512 {
 		t.Fatalf("kind 4 max_size is %d, want 512", rule4.MaxSize.Bytes)
 	}
@@ -139,7 +139,7 @@ func TestConfigFromJSONMerges(t *testing.T) {
 	}
 
 	// sections absent from the document keep their default
-	if cfg.Reads.RateLimits == nil || cfg.NIP11.MaxLimit != 500 {
+	if cfg.ReadLimits == nil || cfg.NIP11.MaxLimit != 500 {
 		t.Fatalf("untouched defaults were lost: %+v", cfg)
 	}
 }
@@ -207,7 +207,7 @@ func TestKindRuleAliasesAndTopLevelKeys(t *testing.T) {
 
 	// both documents mean the same rule, with the same numbers
 	for _, cfg := range []policies.Config{fromTerse, fromVerbose} {
-		rule := cfg.Rules["4"]
+		rule := cfg.EffectiveRule(4)
 		if rule.MaxSize.Bytes != 4096 {
 			t.Fatalf("4KB / 4096 did not parse: %d", rule.MaxSize.Bytes)
 		}
@@ -262,11 +262,10 @@ func TestKindRuleAliasesAndTopLevelKeys(t *testing.T) {
 	if rule.TagPatterns["d"] != "^vaultkey$" || !rule.Read.Privileged || rule.MaxSize.Bytes != 4096 {
 		t.Fatalf("identifier_regex / privileged / size_limit did not land: %+v", rule)
 	}
-	// kind 5 stays in the whitelist and keeps its default rule: this is a
-	// patch on the defaults, not a fresh document. A standalone config that
-	// wants nothing for kind 5 writes the whole document in strict mode.
-	if cfg.Rules["5"] == nil || !cfg.Rules["5"].RequireAuth {
-		t.Fatal("kind 5 is whitelisted, so its default rule stays")
+	// kind 5 stays in the whitelist; it has no rule of its own in this document,
+	// so it resolves to exactly the defaults
+	if !cfg.EffectiveRule(5).RequireAuth || cfg.EffectiveRule(5).MaxSize.Bytes != 4096 {
+		t.Fatalf("kind 5 should resolve to the defaults: %+v", cfg.EffectiveRule(5))
 	}
 }
 
@@ -359,7 +358,7 @@ func TestConfigFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
-	if cfg.Rules["4"].MaxSize.Bytes != 100 || cfg.NIP11.Name != "from file" {
+	if cfg.EffectiveRule(4).MaxSize.Bytes != 100 || cfg.NIP11.Name != "from file" {
 		t.Fatalf("file values not applied: %+v", cfg)
 	}
 
@@ -394,8 +393,8 @@ func TestConfigStrictModeFromEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a partial file must be accepted by default: %v", err)
 	}
-	if cfg.Rules["4"].MaxSize.Bytes != 512 || !cfg.Rules["4"].RequireAuth {
-		t.Fatalf("the patch did not apply on top of the defaults: %+v", cfg.Rules["4"])
+	if cfg.EffectiveRule(4).MaxSize.Bytes != 512 || !cfg.EffectiveRule(4).RequireAuth {
+		t.Fatalf("the patch did not apply on top of the defaults: %+v", cfg.EffectiveRule(4))
 	}
 
 	// strict refuses it, and does so before anything can be wired
@@ -535,7 +534,7 @@ func TestConfigValidationErrors(t *testing.T) {
 		{
 			name: "a connection limit per npub",
 			mutate: func(c *policies.Config) {
-				c.Connections.RateLimits = []policies.RateLimit{{Scope: "npub", Limit: 1, Window: policies.Duration{time.Hour}}}
+				c.ConnectionLimits = []policies.RateLimit{{Scope: "npub", Limit: 1, Window: policies.Duration{time.Hour}}}
 			},
 			reason: "scope \"npub\" must be ip",
 		},
@@ -568,10 +567,11 @@ func TestConfigValidationErrors(t *testing.T) {
 	}
 }
 
-// A kind in the whitelist without a rule is served with the strictest defaults:
-// authenticated writes, author-only reads. A rule that is present and zero is
-// the opposite — an explicit "no restrictions".
-func TestUnruledKindIsStrictest(t *testing.T) {
+// A kind in the whitelist without a rule of its own is served with exactly the
+// top-level defaults — that is what makes the defaults worth having. A rule that
+// is built in Go and holds nothing is the opposite: fully explicit, so every
+// setting is zero, which means "no restrictions".
+func TestUnruledKindGetsTheDefaults(t *testing.T) {
 	cfg := policies.DefaultConfig()
 	// SetKinds prunes the rules of the kinds the new whitelist drops; kind 1059
 	// stays in the whitelist without a rule
@@ -580,16 +580,16 @@ func TestUnruledKindIsStrictest(t *testing.T) {
 	relay, rules := wire(t, cfg)
 	write := writePolicy(relay)
 
-	// writes to the unruled kind need authentication
+	// the defaults' require_auth and required_tags apply to the new kind
 	evt := &nostr.Event{Kind: 1059, PubKey: aliceKey, Content: "x"}
 	if reject, msg := write(context.Background(), evt); !reject || !strings.HasPrefix(msg, "auth-required:") {
-		t.Fatalf("an unruled kind must still require auth on write: %v %q", reject, msg)
+		t.Fatalf("an unruled kind must inherit require_auth: %v %q", reject, msg)
 	}
-	if reject, _ := write(aliceCtx(), evt); reject {
-		t.Fatal("an authenticated write to an unruled kind must pass")
+	if reject, msg := write(aliceCtx(), evt); !reject || !strings.Contains(msg, "expiration") {
+		t.Fatalf("an unruled kind must inherit required_tags: %v %q", reject, msg)
 	}
 
-	// reads of the unruled kind are author-only
+	// the defaults' p rule makes it recipient-visible: author and "p" only
 	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{1059}, Authors: []string{bobKey}}); msg == "" {
 		t.Fatal("a third party must not read an unruled kind")
 	}
@@ -597,18 +597,112 @@ func TestUnruledKindIsStrictest(t *testing.T) {
 		t.Fatal("the author must read their own unruled-kind events")
 	}
 
-	// a zero rule is wide open: the operator chose that
+	// a rule built in Go with nothing in it is fully explicit: wide open
 	cfg.Rules["1059"] = &policies.KindRule{}
 	relay, rules = wire(t, cfg)
 	write = writePolicy(relay)
 	if reject, _ := write(context.Background(), evt); reject {
-		t.Fatal("a zero rule means no write restrictions")
+		t.Fatal("an empty Go rule means no write restrictions")
 	}
 	if reject, _ := rules.ReadFilter(context.Background(), nostr.Filter{Kinds: []int{1059}}); reject {
-		t.Fatal("a zero rule means public reads")
+		t.Fatal("an empty Go rule means public reads")
 	}
 	if rules.PreventBroadcast(&bkind.WebSocket{}, evt) {
-		t.Fatal("a zero rule means public delivery")
+		t.Fatal("an empty Go rule means public delivery")
+	}
+}
+
+// The top-level settings are the defaults every kind starts from, and a rule
+// names only what it changes — including an explicit zero, which means "off"
+// rather than "inherit".
+func TestDefaultsApplyToSparseRules(t *testing.T) {
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
+		"max_size": "4KB",
+		"require_auth": true,
+		"required_tags": ["expiration", "client"],
+		"max_expiration": "75h",
+		"kinds": {"whitelist": [4, 1059, 37801]},
+		"rules": {
+			"4":     {"description": "inherits everything"},
+			"1059":  {"max_size": "64KB"},
+			"37801": {"required_tags": [], "max_expiration": 0, "require_auth": false}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("failed to validate: %v", err)
+	}
+
+	// unnamed settings come from the defaults
+	inherited := cfg.EffectiveRule(4)
+	if inherited.MaxSize.Bytes != 4096 || inherited.MaxExpiration.Duration != 75*time.Hour || !inherited.RequireAuth {
+		t.Fatalf("kind 4 did not inherit the defaults: %+v", inherited)
+	}
+
+	// a named setting wins, and the rest still inherits
+	bigger := cfg.EffectiveRule(1059)
+	if bigger.MaxSize.Bytes != 64*1024 {
+		t.Fatalf("kind 1059 max_size is %d, want 64KB", bigger.MaxSize.Bytes)
+	}
+	if len(bigger.RequiredTags) != 2 || !bigger.RequireAuth {
+		t.Fatalf("kind 1059 lost the settings it did not name: %+v", bigger)
+	}
+
+	// an explicit zero is a choice: it turns the default off, it does not fall
+	// back to it
+	open := cfg.EffectiveRule(37801)
+	if len(open.RequiredTags) != 0 || open.MaxExpiration.Duration != 0 || open.RequireAuth {
+		t.Fatalf("kind 37801 did not override the defaults: %+v", open)
+	}
+	// and it still inherits what it did not mention
+	if open.MaxSize.Bytes != 4096 {
+		t.Fatalf("kind 37801 should still inherit max_size: %d", open.MaxSize.Bytes)
+	}
+
+	// the relay honours the effective rules, not the document text
+	relay, _ := wire(t, cfg)
+	write := writePolicy(relay)
+	noExpiration := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "x",
+		Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
+	if reject, msg := write(context.Background(), noExpiration); reject {
+		t.Fatalf("kind 37801 turned expiration off but was refused: %q", msg)
+	}
+	dm := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext", Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), dm); !reject || !strings.Contains(msg, "expiration") {
+		t.Fatalf("kind 4 inherited the expiration rule but was not held to it: %v %q", reject, msg)
+	}
+}
+
+// "shape" runs a validator that belongs to one kind, so it is rule-local: a
+// newly whitelisted kind must not inherit it and then fail for having no
+// validator of its own.
+func TestShapeIsNotInherited(t *testing.T) {
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
+		"kinds": {"whitelist": [4, 1059]},
+		"rules": {"4": {"shape": true}}
+	}`))
+	if err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("whitelisting a kind without a validator must be legal: %v", err)
+	}
+	if !cfg.EffectiveRule(4).Shape {
+		t.Fatal("kind 4 asked for its validator and did not get it")
+	}
+	if cfg.EffectiveRule(1059).Shape {
+		t.Fatal("kind 1059 inherited a shape flag it cannot honour")
+	}
+
+	// asking for a validator that does not exist is still an error
+	bad, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"1059": {"shape": true}}, "kinds": {"whitelist": [1059]}}`))
+	if err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "shape") {
+		t.Fatalf("a rule asking for a missing validator must be refused, got %v", err)
 	}
 }
 
@@ -709,13 +803,15 @@ func TestTagPatterns(t *testing.T) {
 	cfg := policies.DefaultConfig()
 	cfg.SetKinds([]uint16{4, 37801})
 	cfg.Rules["37801"] = &policies.KindRule{
-		Description:  "master account backup",
-		Write:        policies.WriteGate{Allow: policies.AllowList{"*"}},
-		Read:         policies.ReadGate{Allow: policies.AllowList{"*"}, Privileged: true},
-		RequireAuth:  true,
-		RequiredTags: []string{"d", "expiration", "client"},
-		TagPatterns:  map[string]string{"d": "^vaultkey$"},
-		TagLimits:    policies.TagLimits{MaxTags: 16, MaxNameChars: 64, MaxValueChars: 256},
+		Description: "master account backup",
+		RuleSettings: policies.RuleSettings{
+			Write:        policies.WriteGate{Allow: policies.AllowList{"*"}},
+			Read:         policies.ReadGate{Allow: policies.AllowList{"*"}, Privileged: true},
+			RequireAuth:  true,
+			RequiredTags: []string{"d", "expiration", "client"},
+			TagPatterns:  map[string]string{"d": "^vaultkey$"},
+			TagLimits:    policies.TagLimits{MaxTags: 16, MaxNameChars: 64, MaxValueChars: 256},
+		},
 	}
 
 	relay, _ := wire(t, cfg)
@@ -934,19 +1030,22 @@ func TestPrintedConfigIsTheExampleFile(t *testing.T) {
 func TestPrintedConfigRoundTripsThroughStrictMode(t *testing.T) {
 	public := policies.DefaultConfig()
 	public.SetKinds([]uint16{1})
+	// a full rule built in Go: no presence tracking, so every field is the value
 	public.Rules = map[string]*policies.KindRule{
 		"1": {
-			Description:   "public notes",
-			Write:         policies.WriteGate{Allow: policies.AllowList{"*"}},
-			Read:          policies.ReadGate{Allow: policies.AllowList{"*"}},
-			MaxSize:       policies.Size{Bytes: 8192},
-			MaxExpiration: policies.Duration{24 * time.Hour},
-			TagLimits:     policies.TagLimits{MaxTags: 8, MaxNameChars: 32, MaxValueChars: 128},
-			RateLimits: []policies.RateLimit{
-				{Scope: "npub", Limit: 10, Window: policies.Duration{time.Minute}},
+			Description: "public notes",
+			RuleSettings: policies.RuleSettings{
+				Write:         policies.WriteGate{Allow: policies.AllowList{"*"}},
+				Read:          policies.ReadGate{Allow: policies.AllowList{"*"}},
+				MaxSize:       policies.Size{Bytes: 8192},
+				MaxExpiration: policies.Duration{24 * time.Hour},
+				TagLimits:     policies.TagLimits{MaxTags: 8, MaxNameChars: 32, MaxValueChars: 128},
+				RateLimits: []policies.RateLimit{
+					{Scope: "npub", Limit: 10, Window: policies.Duration{time.Minute}},
+				},
+				TagPatterns: map[string]string{"d": "^note-[0-9]+$"},
+				Errors:      map[string]string{"max_size": "blocked: too big ({size} > {limit})"},
 			},
-			TagPatterns: map[string]string{"d": "^note-[0-9]+$"},
-			Errors:      map[string]string{"max_size": "blocked: too big ({size} > {limit})"},
 		},
 	}
 	public.NIP11.ExtraNIPs = []int{50}
@@ -972,8 +1071,20 @@ func TestPrintedConfigRoundTripsThroughStrictMode(t *testing.T) {
 		if err := restored.Validate(); err != nil {
 			t.Fatalf("the printed document does not validate: %v", err)
 		}
-		if !reflect.DeepEqual(restored, cfg) {
-			t.Fatalf("round trip changed the config:\n got %+v\nwant %+v", restored, cfg)
+		// the contract is the document: a rule built in Go and the same rule
+		// decoded from the file have different presence bookkeeping but must
+		// print (and therefore behave) identically
+		again, err := restored.JSON()
+		if err != nil {
+			t.Fatalf("failed to render the restored config: %v", err)
+		}
+		if string(again) != string(document) {
+			t.Fatalf("round trip changed the document:\n got %s\nwant %s", again, document)
+		}
+		for kind, rule := range cfg.EffectiveRules() {
+			if want := restored.EffectiveRule(kind); !reflect.DeepEqual(rule, want) {
+				t.Fatalf("round trip changed kind %d's effective rule:\n got %+v\nwant %+v", kind, want, rule)
+			}
 		}
 	}
 }
@@ -997,6 +1108,17 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		}
 		return clone
 	}
+	mustPass := func(t *testing.T, doc map[string]json.RawMessage) {
+		t.Helper()
+		body, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg policies.Config
+		if _, err := cfg.WithStrictJSON(body); err != nil {
+			t.Fatalf("strict mode rejected a document it should accept: %v", err)
+		}
+	}
 	mustFail := func(t *testing.T, name string, doc map[string]json.RawMessage) {
 		t.Helper()
 		body, err := json.Marshal(doc)
@@ -1011,8 +1133,13 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		}
 	}
 
-	// every top-level key
-	for _, key := range []string{"kinds", "rules", "filters", "reads", "connections", "count", "nip11", "negentropy"} {
+	// every top-level key, defaults included
+	for _, key := range []string{
+		"kinds", "rules", "filters", "read_limits", "connection_limits", "count", "nip11", "negentropy",
+		"write", "read", "require_auth", "max_size", "max_expiration", "max_age_of_event",
+		"max_age_event_in_future", "p_tag", "required_tags", "tag_patterns", "tag_limits",
+		"rate_limits", "errors",
+	} {
 		clone := cloneDoc()
 		delete(clone, key)
 		mustFail(t, key, clone)
@@ -1042,15 +1169,18 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		}
 	}
 
-	// every field of a rule body, of its gates, of tag_limits and of a rate
-	// limit entry
+	// a rule body is sparse by design, so no field of it is required; what is
+	// required is that nothing inside it is misspelled, and that the objects it
+	// does carry are complete
 	var rules map[string]json.RawMessage
 	if err := json.Unmarshal(document["rules"], &rules); err != nil {
 		t.Fatal(err)
 	}
-	var rule map[string]json.RawMessage
-	if err := json.Unmarshal(rules["4"], &rule); err != nil {
-		t.Fatal(err)
+	// the gate/tag_limits/rate_limits checks need a rule body that carries
+	// them: the top-level defaults do
+	rule := map[string]json.RawMessage{}
+	for _, key := range []string{"write", "read", "tag_limits", "rate_limits"} {
+		rule[key] = document[key]
 	}
 	withRule := func(t *testing.T, name string, mutate func(map[string]json.RawMessage)) {
 		t.Helper()
@@ -1077,12 +1207,15 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		mustFail(t, name, clone)
 	}
 
-	for _, name := range []string{"description", "write", "read", "require_auth", "max_size", "max_expiration", "max_age_of_event", "max_age_event_in_future", "p_tag", "required_tags", "tag_patterns", "tag_limits", "rate_limits", "shape", "errors"} {
-		field := name
-		withRule(t, "rules.4."+field, func(body map[string]json.RawMessage) {
-			delete(body, field)
-		})
-	}
+	// a sparse rule is accepted: a rule that only says "max_size" is a rule
+	clone := cloneDoc()
+	clone["rules"] = []byte(`{"4": {"max_size": 512}}`)
+	mustPass(t, clone)
+
+	// a misspelled setting inside a rule is not
+	clone = cloneDoc()
+	clone["rules"] = []byte(`{"4": {"max_sise": 512}}`)
+	mustFail(t, "max_sise", clone)
 
 	// the gates
 	for gate, keys := range map[string][]string{"write": {"allow"}, "read": {"allow", "privileged"}} {
@@ -1118,8 +1251,8 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		body["rate_limits"] = []byte(`[{"scope": "npub", "limit": 30}]`)
 	})
 
-	// the same reduced documents are fine in lenient mode: that is the difference
-	clone := cloneDoc()
+	// a sparse document is fine in lenient mode too: that is the difference
+	clone = cloneDoc()
 	var partialRules map[string]json.RawMessage
 	if err := json.Unmarshal(clone["rules"], &partialRules); err != nil {
 		t.Fatal(err)

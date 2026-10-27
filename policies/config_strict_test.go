@@ -54,16 +54,30 @@ func TestStrictSchemaCoversEveryField(t *testing.T) {
 		}
 	}
 
-	// rule bodies: every field of KindRule
+	// rule bodies: every field of KindRule — the description, the rule-local
+	// settings and the inherited ones
 	var inRule []string
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(KindRule{})) {
-		if !f.IsExported() {
-			continue
+		if f.Anonymous || !f.IsExported() {
+			continue // the embedded settings are checked below, field by field
 		}
 		inRule = append(inRule, jsonName(f))
 	}
-	if !slices.Equal(sorted(inRule), sorted(slices.Clone(strictRuleKeys))) {
-		t.Fatalf("strictRuleKeys is out of date:\n has %v\nwants %v (KindRule fields)", strictRuleKeys, inRule)
+	wantRule := append(append([]string{"description"}, strictRuleKeys...), ruleOnlyNames...)
+	if !slices.Equal(sorted(inRule), sorted(wantRule)) {
+		t.Fatalf("strictRuleKeys is out of date:\n has %v\nwants %v (KindRule fields)", wantRule, inRule)
+	}
+
+	// the defaults are the per-kind settings: same names, one definition
+	var inSettings []string
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(RuleSettings{})) {
+		if !f.IsExported() {
+			continue
+		}
+		inSettings = append(inSettings, jsonName(f))
+	}
+	if !slices.Equal(sorted(inSettings), sorted(slices.Clone(ruleFieldNames))) {
+		t.Fatalf("ruleFieldNames is out of date:\n has %v\nwants %v (RuleSettings fields)", ruleFieldNames, inSettings)
 	}
 
 	// gates, tag limits and rate limits

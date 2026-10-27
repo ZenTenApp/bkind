@@ -4,103 +4,44 @@
     "allow_ephemeral": false,
     "reject_unserved_filters": true
   },
+  "write": {
+    "allow": ["*"]
+  },
+  "read": {
+    "allow": ["*"],
+    "privileged": true
+  },
+  "require_auth": true,
+  "max_size": 4096,
+  "max_expiration": "75h",
+  "max_age_of_event": "0s",
+  "max_age_event_in_future": "0s",
+  "p_tag": "hex",
+  "required_tags": ["expiration", "client"],
+  "tag_patterns": {},
+  "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
+  "rate_limits": [
+    {"scope": "npub", "limit": 30, "window": "1h"},
+    {"scope": "npub", "limit": 200, "window": "1d"},
+    {"scope": "ip", "limit": 60, "window": "1h"},
+    {"scope": "ip", "limit": 400, "window": "1d"}
+  ],
+  "errors": {},
   "rules": {
-    "4": {
-      "description": "NIP-04 direct messages",
-      "write": {
-        "allow": ["*"]
-      },
-      "read": {
-        "allow": ["*"],
-        "privileged": true
-      },
-      "require_auth": true,
-      "max_size": 4096,
-      "max_expiration": "75h",
-      "max_age_of_event": "0s",
-      "max_age_event_in_future": "0s",
-      "p_tag": "hex",
-      "required_tags": ["expiration", "client"],
-      "tag_patterns": {},
-      "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
-      "rate_limits": [
-        {"scope": "npub", "limit": 30, "window": "1h"},
-        {"scope": "npub", "limit": 200, "window": "1d"},
-        {"scope": "ip", "limit": 60, "window": "1h"},
-        {"scope": "ip", "limit": 400, "window": "1d"}
-      ],
-      "shape": true,
-      "errors": {}
-    },
-    "5": {
-      "description": "NIP-09 deletion requests",
-      "write": {
-        "allow": ["*"]
-      },
-      "read": {
-        "allow": ["*"],
-        "privileged": true
-      },
-      "require_auth": true,
-      "max_size": 4096,
-      "max_expiration": "75h",
-      "max_age_of_event": "0s",
-      "max_age_event_in_future": "0s",
-      "p_tag": "",
-      "required_tags": ["expiration", "client"],
-      "tag_patterns": {},
-      "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
-      "rate_limits": [
-        {"scope": "npub", "limit": 30, "window": "1h"},
-        {"scope": "npub", "limit": 200, "window": "1d"},
-        {"scope": "ip", "limit": 60, "window": "1h"},
-        {"scope": "ip", "limit": 400, "window": "1d"}
-      ],
-      "shape": true,
-      "errors": {}
-    },
-    "62": {
-      "description": "NIP-62 vanish requests",
-      "write": {
-        "allow": ["*"]
-      },
-      "read": {
-        "allow": ["*"],
-        "privileged": true
-      },
-      "require_auth": true,
-      "max_size": 4096,
-      "max_expiration": "75h",
-      "max_age_of_event": "0s",
-      "max_age_event_in_future": "0s",
-      "p_tag": "",
-      "required_tags": ["expiration", "client"],
-      "tag_patterns": {},
-      "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
-      "rate_limits": [
-        {"scope": "npub", "limit": 30, "window": "1h"},
-        {"scope": "npub", "limit": 200, "window": "1d"},
-        {"scope": "ip", "limit": 60, "window": "1h"},
-        {"scope": "ip", "limit": 400, "window": "1d"}
-      ],
-      "shape": true,
-      "errors": {}
-    }
+    "4": {"description": "NIP-04 direct messages", "shape": true},
+    "5": {"description": "NIP-09 deletion requests", "p_tag": "", "shape": true},
+    "62": {"description": "NIP-62 vanish requests", "p_tag": "", "shape": true}
   },
   "filters": {"reject_empty": true, "reject_search": true},
-  "reads": {
-    "rate_limits": [
-      {"scope": "npub", "limit": 60, "window": "1h"},
-      {"scope": "npub", "limit": 400, "window": "1d"},
-      {"scope": "ip", "limit": 120, "window": "1h"},
-      {"scope": "ip", "limit": 800, "window": "1d"}
-    ]
-  },
-  "connections": {
-    "rate_limits": [
-      {"scope": "ip", "limit": 120, "window": "1h"}
-    ]
-  },
+  "read_limits": [
+    {"scope": "npub", "limit": 60, "window": "1h"},
+    {"scope": "npub", "limit": 400, "window": "1d"},
+    {"scope": "ip", "limit": 120, "window": "1h"},
+    {"scope": "ip", "limit": 800, "window": "1d"}
+  ],
+  "connection_limits": [
+    {"scope": "ip", "limit": 120, "window": "1h"}
+  ],
   "count": {"reject": true},
   "nip11": {
     "name": "B Kind",

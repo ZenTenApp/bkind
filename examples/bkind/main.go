@@ -84,7 +84,7 @@ func main() {
 	defer stop()
 
 	retention := "no expiration policy"
-	for _, rule := range cfg.policies.Rules {
+	for _, rule := range cfg.policies.EffectiveRules() {
 		if rule != nil && slices.Contains(rule.RequiredTags, "expiration") {
 			retention = fmt.Sprintf("mandatory NIP-40 expiration (max %s)", rule.MaxExpiration)
 			break

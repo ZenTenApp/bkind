@@ -25,11 +25,11 @@ func (c *Config) Validate() error {
 	if len(c.NIP11.ExtraNIPs) == 0 {
 		c.NIP11.ExtraNIPs = nil
 	}
-	if len(c.Reads.RateLimits) == 0 {
-		c.Reads.RateLimits = nil
+	if len(c.ReadLimits) == 0 {
+		c.ReadLimits = nil
 	}
-	if len(c.Connections.RateLimits) == 0 {
-		c.Connections.RateLimits = nil
+	if len(c.ConnectionLimits) == 0 {
+		c.ConnectionLimits = nil
 	}
 
 	k := c.KindRules()
@@ -37,28 +37,45 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	// every rule must be for a served kind, and must itself make sense
+	// the defaults must themselves be a sane rule: they are what every kind
+	// starts from, and a kind that overrides nothing relies on them entirely
+	if err := validateFields(&c.RuleSettings, "the top-level defaults"); err != nil {
+		return err
+	}
+
+	// every rule must be for a served kind, and its effective value — defaults
+	// plus its own settings — must make sense
 	for _, key := range sortedRuleKeys(c.Rules) {
-		rule := c.Rules[key]
-		kind, err := strconv.ParseUint(key, 10, 16)
-		if err != nil {
+		if _, err := strconv.ParseUint(key, 10, 16); err != nil {
 			return fmt.Errorf("rules has key %q, which is not a kind number", key)
 		}
+		kind, _ := strconv.ParseUint(key, 10, 16)
 		if !k.Has(uint16(kind)) {
 			return fmt.Errorf("rules has kind %d, which kinds.whitelist does not include", kind)
 		}
-		if rule == nil {
+		if c.Rules[key] == nil {
 			return fmt.Errorf("rules[%d] is null", kind)
 		}
-		if err := rule.validate(uint16(kind)); err != nil {
-			return fmt.Errorf("rules[%d]: %w", kind, err)
+		effective := c.EffectiveRule(uint16(kind))
+		if err := validateFields(&effective.RuleSettings, fmt.Sprintf("rules[%d] resolved over the defaults", kind)); err != nil {
+			return err
+		}
+		if effective.Shape && ShapeValidator(uint16(kind)) == nil {
+			return fmt.Errorf("rules[%d]: shape is true but kind %d has no registered shape validator", kind, kind)
+		}
+		_ = effective
+	}
+
+	for kind, rule := range c.EffectiveRules() {
+		if rule.Shape && ShapeValidator(kind) == nil {
+			return fmt.Errorf("kind %d resolves with shape: true but has no registered shape validator", kind)
 		}
 	}
 
-	if err := validateRateLimits("reads.rate_limits", c.Reads.RateLimits, "npub", "ip"); err != nil {
+	if err := validateRateLimits("read_limits", c.ReadLimits, "npub", "ip"); err != nil {
 		return err
 	}
-	if err := validateRateLimits("connections.rate_limits", c.Connections.RateLimits, "ip"); err != nil {
+	if err := validateRateLimits("connection_limits", c.ConnectionLimits, "ip"); err != nil {
 		return err
 	}
 
@@ -75,6 +92,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func errBadPTag(value string) error {
+	return fmt.Errorf("p_tag %q must be \"hex\" or empty", value)
+}
+
 func sortedRuleKeys(rules map[string]*KindRule) []string {
 	keys := make([]string, 0, len(rules))
 	for key := range rules {
@@ -84,76 +105,74 @@ func sortedRuleKeys(rules map[string]*KindRule) []string {
 	return keys
 }
 
-func (r *KindRule) validate(kind uint16) error {
+// validateFields checks one set of per-kind settings, whatever it came from: the
+// top-level defaults or a rule resolved over them.
+func validateFields(f *RuleSettings, where string) error {
 	// nil and empty are the same setting; normalizing keeps a parsed config
 	// comparable to one built in code
-	if len(r.RequiredTags) == 0 {
-		r.RequiredTags = nil
+	if len(f.RequiredTags) == 0 {
+		f.RequiredTags = nil
 	}
-	if len(r.RateLimits) == 0 {
-		r.RateLimits = nil
+	if len(f.RateLimits) == 0 {
+		f.RateLimits = nil
 	}
-	if len(r.TagPatterns) == 0 {
-		r.TagPatterns = nil
+	if len(f.TagPatterns) == 0 {
+		f.TagPatterns = nil
 	}
-	if len(r.Errors) == 0 {
-		r.Errors = nil
-	}
-
-	if r.PTag != "" && r.PTag != "hex" {
-		return fmt.Errorf("p_tag %q must be \"hex\" or empty", r.PTag)
-	}
-	if r.MaxSize.Bytes < 0 {
-		return fmt.Errorf("max_size cannot be negative")
-	}
-	if r.MaxExpiration.Duration < 0 || r.MaxAge.Duration < 0 || r.MaxFutureAge.Duration < 0 {
-		return fmt.Errorf("durations cannot be negative")
+	if len(f.Errors) == 0 {
+		f.Errors = nil
 	}
 
-	if err := validateAllow("write.allow", r.Write.Allow); err != nil {
+	if f.PTag != "" && f.PTag != "hex" {
+		return fmt.Errorf("%s: %w", where, errBadPTag(f.PTag))
+	}
+	if f.MaxSize.Bytes < 0 {
+		return fmt.Errorf("%s: max_size cannot be negative", where)
+	}
+	if f.MaxExpiration.Duration < 0 || f.MaxAge.Duration < 0 || f.MaxFutureAge.Duration < 0 {
+		return fmt.Errorf("%s: durations cannot be negative", where)
+	}
+
+	if err := validateAllow(where+".write.allow", f.Write.Allow); err != nil {
 		return err
 	}
-	if err := validateAllow("read.allow", r.Read.Allow); err != nil {
+	if err := validateAllow(where+".read.allow", f.Read.Allow); err != nil {
 		return err
 	}
 
 	seenTags := map[string]bool{}
-	for _, name := range r.RequiredTags {
+	for _, name := range f.RequiredTags {
 		if name == "" {
-			return fmt.Errorf("required_tags contains an empty tag name")
+			return fmt.Errorf("%s: required_tags contains an empty tag name", where)
 		}
 		if seenTags[name] {
-			return fmt.Errorf("required_tags names %q twice", name)
+			return fmt.Errorf("%s: required_tags names %q twice", where, name)
 		}
 		seenTags[name] = true
 	}
 
-	for name, pattern := range r.TagPatterns {
+	for name, pattern := range f.TagPatterns {
 		if name == "" {
-			return fmt.Errorf("tag_patterns has an empty tag name")
+			return fmt.Errorf("%s: tag_patterns has an empty tag name", where)
 		}
 		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("tag_patterns[%q]: %q is not a valid regular expression: %v", name, pattern, err)
+			return fmt.Errorf("%s: tag_patterns[%q]: %q is not a valid regular expression: %v", where, name, pattern, err)
 		}
 	}
 
-	if r.TagLimits.set() {
-		if r.TagLimits.MaxTags <= 0 || r.TagLimits.MaxNameChars <= 0 || r.TagLimits.MaxValueChars <= 0 {
-			return fmt.Errorf("tag_limits: when any limit is set, all three must be positive")
+	if f.TagLimits.set() {
+		if f.TagLimits.MaxTags <= 0 || f.TagLimits.MaxNameChars <= 0 || f.TagLimits.MaxValueChars <= 0 {
+			return fmt.Errorf("%s: tag_limits: when any limit is set, all three must be positive", where)
 		}
 	}
 
-	if err := validateRateLimits("rate_limits", r.RateLimits, "npub", "ip"); err != nil {
+	if err := validateRateLimits(where+".rate_limits", f.RateLimits, "npub", "ip"); err != nil {
 		return err
 	}
 
-	if r.Shape && ShapeValidator(kind) == nil {
-		return fmt.Errorf("shape is true but kind %d has no registered shape validator", kind)
-	}
-
-	for key := range r.Errors {
+	for key := range f.Errors {
 		if !errorMessageKeys[key] {
-			return fmt.Errorf("errors has key %q, which is not one of %s", key, strings.Join(sortedErrorKeys(), ", "))
+			return fmt.Errorf("%s: errors has key %q, which is not one of %s", where, key, strings.Join(sortedErrorKeys(), ", "))
 		}
 	}
 
@@ -203,22 +222,16 @@ func validateRateLimits(name string, limits []RateLimit, scopes ...string) error
 	return nil
 }
 
-// ruleFor returns the rule of a served kind, or nil when the config gives it
-// none. Rule keys are the plain decimal kind numbers.
-func (c Config) ruleFor(kind uint16) *KindRule {
-	return c.Rules[strconv.Itoa(int(kind))]
-}
-
-// kindRules derives the gate set every read path answers from. A kind's rule
-// decides its visibility class: privileged with a "hex" p rule is
+// KindRules derives the gate set every read path answers from. A kind's
+// effective rule decides its visibility class: privileged with a "hex" p rule is
 // recipient-visible (author and "p"), privileged without one is author-only,
-// unprivileged is public within the reader list. A served kind without a rule
-// is the strictest: author-only, after authentication.
+// unprivileged is public within the reader list. A whitelisted kind without a
+// rule of its own gets exactly the defaults.
 func (c Config) KindRules() KindRules {
 	access := make(map[uint16]kindAccess, len(c.Kinds.Whitelist))
-	for _, kind := range c.Kinds.Whitelist {
+	for kind, rule := range c.EffectiveRules() {
 		acc := kindAccess{visibility: visibilityAuthorOnly, requireAuth: true}
-		if rule := c.ruleFor(kind); rule != nil {
+		if rule != nil {
 			switch {
 			case rule.Read.Privileged && rule.PTag == "hex":
 				acc.visibility = visibilityRecipient
@@ -237,28 +250,23 @@ func (c Config) KindRules() KindRules {
 	return newKindRules(c.Kinds.Whitelist, c.Kinds.AllowEphemeral, c.Kinds.RejectUnservedFilters, access)
 }
 
-// writePolicy is the per-kind write gate: the checks of the event's own rule,
-// in the order a client can act on. A served kind without a rule still gets
-// authenticated writes — the strictest default — while a rule that is present
-// and zero means the operator chose "no restriction".
+// writePolicy is the per-kind write gate: the checks of the event's own
+// effective rule, in the order a client can act on.
 func (c Config) writePolicy() func(context.Context, *nostr.Event) (bool, string) {
-	byKind := make(map[uint16][]eventCheck, len(c.Rules))
-	for _, key := range sortedRuleKeys(c.Rules) {
-		rule := c.Rules[key]
-		kind, err := strconv.ParseUint(key, 10, 16)
-		if err != nil || rule == nil {
-			continue // Validate refuses this before Wire can reach it
+	byKind := make(map[uint16][]eventCheck, len(c.Kinds.Whitelist))
+	for kind, rule := range c.EffectiveRules() {
+		if rule == nil {
+			continue
 		}
-		byKind[uint16(kind)] = rule.checks(uint16(kind))
+		byKind[kind] = rule.checks(kind)
 	}
-	unruled := []eventCheck{(&KindRule{RequireAuth: true}).authCheck()}
 
 	return func(ctx context.Context, evt *nostr.Event) (bool, string) {
+		// RestrictKind has already rejected unserved kinds, so a miss here is a
+		// whitelisted kind: it runs the defaults
 		checks, ok := byKind[uint16(evt.Kind)]
 		if !ok {
-			// RestrictKind has already rejected unserved kinds; this is a served
-			// kind the config gave no rule
-			checks = unruled
+			return false, ""
 		}
 		for _, check := range checks {
 			if reject, msg := check(ctx, evt); reject {
@@ -302,7 +310,7 @@ func (c Config) Wire(relay *bkind.Relay) error {
 	if c.Filters.RejectSearch {
 		readPolicies = append(readPolicies, NoSearchQueries)
 	}
-	for _, rl := range c.Reads.RateLimits {
+	for _, rl := range c.ReadLimits {
 		switch rl.Scope {
 		case "npub":
 			readPolicies = append(readPolicies, FilterAuthedPubKeyRateLimiter(rl.Limit, rl.Window.Duration, rl.Limit))
@@ -320,7 +328,7 @@ func (c Config) Wire(relay *bkind.Relay) error {
 	relay.PreventBroadcast = append(relay.PreventBroadcast, k.PreventBroadcast)
 
 	var rejectConnection []func(*http.Request) bool
-	for _, rl := range c.Connections.RateLimits {
+	for _, rl := range c.ConnectionLimits {
 		rejectConnection = append(rejectConnection, ConnectionRateLimiter(rl.Limit, rl.Window.Duration, rl.Limit))
 	}
 	relay.RejectConnection = append(relay.RejectConnection, rejectConnection...)
@@ -338,8 +346,7 @@ func (c Config) applyNIP11(relay *bkind.Relay, k KindRules) error {
 	}
 
 	anyExpiration, anyAuth, maxTags, maxContent := false, false, 0, 0
-	for _, key := range sortedRuleKeys(c.Rules) {
-		rule := c.Rules[key]
+	for _, rule := range c.EffectiveRules() {
 		if rule == nil {
 			continue
 		}
@@ -436,33 +443,27 @@ func (c Config) defaultDescription(k KindRules) string {
 	return strings.Join(parts, ", ") + " only."
 }
 
-// strictTopLevel is the set of keys an explicit document itself must carry.
-var strictTopLevel = []string{
-	"kinds", "rules", "filters", "reads", "connections", "count", "nip11", "negentropy",
-}
-
 // strictSections is the JSON schema an explicit configuration has to satisfy:
-// every field of every section must be present. It is written out by hand
-// rather than reflected so that adding a field to Config without adding it here
-// is a compile-time neighbour in the same file, not a silent gap —
+// every field of every relay-wide section must be present. It is written out by
+// hand rather than reflected so that adding a field to Config without adding it
+// here is a compile-time neighbour in the same file, not a silent gap —
 // TestStrictSchemaCoversEveryField keeps the two honest.
 var strictSections = map[string][]string{
-	"kinds":       {"whitelist", "allow_ephemeral", "reject_unserved_filters"},
-	"filters":     {"reject_empty", "reject_search"},
-	"reads":       {"rate_limits"},
-	"connections": {"rate_limits"},
-	"count":       {"reject"},
-	"nip11":       {"name", "description", "max_message_length", "max_subscriptions", "max_filters", "max_limit", "extra_nips"},
+	"kinds":   {"whitelist", "allow_ephemeral", "reject_unserved_filters"},
+	"filters": {"reject_empty", "reject_search"},
+	"count":   {"reject"},
+	"nip11":   {"name", "description", "max_message_length", "max_subscriptions", "max_filters", "max_limit", "extra_nips"},
 }
 
-// strictRuleKeys is the shape of every rules entry: a strict document says
-// something about every field of every kind it configures, even when the
-// something is "off".
-var strictRuleKeys = []string{
-	"description", "write", "read", "require_auth", "max_size", "max_expiration",
-	"max_age_of_event", "max_age_event_in_future", "p_tag", "required_tags",
-	"tag_patterns", "tag_limits", "rate_limits", "shape", "errors",
-}
+// strictTopLevel is every key an explicit document must carry: the relay-wide
+// sections and the per-kind defaults. A rule body is deliberately not on this
+// list — a rule says only what it changes, and the defaults are what it changes
+// them from.
+var strictTopLevel = append(append([]string{}, documentSections...), ruleFieldNames...)
+
+// strictRuleKeys is the complete set of settings a rule body may name. It is the
+// same list as the defaults: one set of names, two places to use it.
+var strictRuleKeys = ruleFieldNames
 
 // strictGateKeys is the shape of the write and read gates.
 var strictGateKeys = map[string][]string{
@@ -508,42 +509,78 @@ func checkComplete(data []byte) error {
 		}
 	}
 
+	// a rule body is sparse by design, but it must be an object, and every
+	// setting it names must be a setting
 	var rules map[string]json.RawMessage
 	if err := json.Unmarshal(top["rules"], &rules); err != nil {
 		return fmt.Errorf("incomplete configuration: %q must be an object keyed by kind number", "rules")
 	}
 	for _, key := range sortedKeys(rules) {
-		if err := checkRuleComplete(key, rules[key]); err != nil {
+		if err := checkRuleKnown(key, rules[key]); err != nil {
 			return err
+		}
+	}
+
+	// the same for the rate limit lists, whose entries sit inside arrays
+	for _, name := range []string{"read_limits", "connection_limits"} {
+		var limits []map[string]json.RawMessage
+		if err := json.Unmarshal(top[name], &limits); err != nil {
+			return fmt.Errorf("incomplete configuration: %q must be an array", name)
+		}
+		for i, entry := range limits {
+			for _, field := range strictRateLimitKeys {
+				if _, ok := entry[field]; !ok {
+					return missingField(fmt.Sprintf("%s[%d].%s", name, i, field))
+				}
+			}
+		}
+	}
+	if raw, ok := top["rate_limits"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		var limits []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &limits); err != nil {
+			return fmt.Errorf("incomplete configuration: %q must be an array", "rate_limits")
+		}
+		for i, entry := range limits {
+			for _, field := range strictRateLimitKeys {
+				if _, ok := entry[field]; !ok {
+					return missingField(fmt.Sprintf("rate_limits[%d].%s", i, field))
+				}
+			}
 		}
 	}
 
 	return nil
 }
 
-func checkRuleComplete(key string, body json.RawMessage) error {
+// checkRuleKnown refuses a rule body that names something that is not a setting,
+// and checks the completeness of the objects nested in it.
+func checkRuleKnown(kind string, body json.RawMessage) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
-		return fmt.Errorf("incomplete configuration: rules.%s must be an object with every field", key)
+		return fmt.Errorf("incomplete configuration: rules.%s must be an object", kind)
 	}
-	for _, name := range strictRuleKeys {
-		if _, ok := fields[name]; !ok {
-			return missingField("rules." + key + "." + name)
+	for name := range fields {
+		canonical := name
+		if alias, ok := ruleAliases[name]; ok {
+			canonical = alias
+		}
+		if canonical != "description" && !slices.Contains(ruleFieldNames, canonical) && !slices.Contains(ruleOnlyNames, canonical) {
+			return fmt.Errorf("unknown field %q in rules.%s", name, kind)
 		}
 	}
 
 	for gate, keys := range strictGateKeys {
 		raw, ok := fields[gate]
 		if !ok {
-			continue // missingField already named it
+			continue
 		}
 		var g map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &g); err != nil {
-			return fmt.Errorf("incomplete configuration: rules.%s.%s must be an object", key, gate)
+			return fmt.Errorf("incomplete configuration: rules.%s.%s must be an object", kind, gate)
 		}
 		for _, name := range keys {
 			if _, ok := g[name]; !ok {
-				return missingField("rules." + key + "." + gate + "." + name)
+				return missingField("rules." + kind + "." + gate + "." + name)
 			}
 		}
 	}
@@ -551,23 +588,25 @@ func checkRuleComplete(key string, body json.RawMessage) error {
 	if raw, ok := fields["tag_limits"]; ok {
 		var limits map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &limits); err != nil {
-			return fmt.Errorf("incomplete configuration: rules.%s.tag_limits must be an object", key)
+			return fmt.Errorf("incomplete configuration: rules.%s.tag_limits must be an object", kind)
 		}
 		for _, name := range strictTagLimitKeys {
 			if _, ok := limits[name]; !ok {
-				return missingField("rules." + key + ".tag_limits." + name)
+				return missingField("rules." + kind + ".tag_limits." + name)
 			}
 		}
 	}
 
-	var limits []map[string]json.RawMessage
-	if err := json.Unmarshal(fields["rate_limits"], &limits); err != nil {
-		return fmt.Errorf("incomplete configuration: rules.%s.rate_limits must be an array", key)
-	}
-	for i, entry := range limits {
-		for _, name := range strictRateLimitKeys {
-			if _, ok := entry[name]; !ok {
-				return missingField(fmt.Sprintf("rules.%s.rate_limits[%d].%s", key, i, name))
+	if raw, ok := fields["rate_limits"]; ok {
+		var limits []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &limits); err != nil {
+			return fmt.Errorf("incomplete configuration: rules.%s.rate_limits must be an array", kind)
+		}
+		for i, entry := range limits {
+			for _, name := range strictRateLimitKeys {
+				if _, ok := entry[name]; !ok {
+					return missingField(fmt.Sprintf("rules.%s.rate_limits[%d].%s", kind, i, name))
+				}
 			}
 		}
 	}

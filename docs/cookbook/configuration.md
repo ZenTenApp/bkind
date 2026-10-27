@@ -5,45 +5,47 @@ outline: deep
 # Configuring a relay
 
 The reference relay in `examples/bkind` keeps its policy set in
-`policies.Config` (`policies/config.go`), and the config is **keyed by kind**:
-every limit, tag rule, gate and rate limit is a field of the kind it belongs to.
-A different relay shape is a config file, not a patch.
+`policies.Config` (`policies/config.go`). The per-kind settings — gates, limits,
+tag rules, write rate limits — appear twice in the document: once at the **top
+level**, where they are the defaults every kind starts from, and once inside
+**`rules`**, where a kind overrides what it needs. A different relay shape is a
+config file, not a patch.
 
 ```json
 {
   "kinds": {"whitelist": [4, 5, 62]},
+
+  "write": {"allow": "*"},
+  "read": {"allow": "*", "privileged": true},
+  "require_auth": true,
+  "max_size": "4KB",
+  "max_expiration": "75h",
+  "required_tags": ["expiration", "client"],
+  "p_tag": "hex",
+  "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
+  "rate_limits": [
+    {"scope": "npub", "limit": 30, "window": "1h"},
+    {"scope": "ip", "limit": 60, "window": "1h"}
+  ],
+
   "rules": {
-    "4": {
-      "description": "NIP-04 direct messages",
-      "write": {"allow": "*"},
-      "read": {"allow": "*", "privileged": true},
-      "require_auth": true,
-      "max_size": "4KB",
-      "max_expiration": "75h",
-      "required_tags": ["expiration", "client"],
-      "p_tag": "hex",
-      "tag_limits": {"max_tags": 16, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
-      "rate_limits": [
-        {"scope": "npub", "limit": 30, "window": "1h"},
-        {"scope": "ip", "limit": 60, "window": "1h"}
-      ],
-      "shape": true,
-      "errors": {}
-    }
+    "4":    {"description": "NIP-04 direct messages", "shape": true},
+    "5":    {"description": "NIP-09 deletion requests", "p_tag": "", "shape": true},
+    "62":   {"description": "NIP-62 vanish requests", "p_tag": "", "shape": true}
   },
+
   "filters": {"reject_empty": true, "reject_search": true},
-  "reads": {"rate_limits": [{"scope": "npub", "limit": 60, "window": "1h"}]},
-  "connections": {"rate_limits": [{"scope": "ip", "limit": 120, "window": "1h"}]},
+  "read_limits": [{"scope": "npub", "limit": 60, "window": "1h"}],
+  "connection_limits": [{"scope": "ip", "limit": 120, "window": "1h"}],
   "count": {"reject": true},
   "nip11": {"name": "B Kind"},
   "negentropy": false
 }
 ```
 
-Everything under `rules."4"` is what the relay does with Kind 4 and nothing
-else; kinds 5 and 62 carry their own rules in the full example
-(`examples/bkind/bkind.example.json`, which is what `bkind -print-config`
-prints).
+That is the whole set, and it is exactly what `bkind -print-config` prints for
+the default configuration (`examples/bkind/bkind.example.json`, compared byte for
+byte by a test).
 
 ## Precedence
 
@@ -69,15 +71,15 @@ file only has to name what it changes.
 
 Two ways to use the file, and the difference is a switch, not a rewrite:
 
-- **Partial** (the default). The file is a patch on the defaults.
-  `{"rules":{"4":{"max_size":512}}}` changes one field of one kind and inherits
-  everything else, including the rules of the other kinds.
-- **Explicit** (`BKIND_CONFIG_STRICT=true`). Every field must be present —
-  every section, and every field of every rule body, down to the gates and the
-  rate limit entries. Absent fields are a startup error naming the field, and
-  there is no "inherits whatever the binary happened to default to". Good for a
-  config kept in version control and reviewed, and the only mode where reading
-  the file tells you what the relay does.
+- **Partial** (the default). The file is a patch on the reference config.
+  `{"max_size":"512B"}` changes one default, for every kind that does not
+  override it; `{"rules":{"4":{"max_size":512}}}` changes one kind only.
+- **Explicit** (`BKIND_CONFIG_STRICT=true`). Every top-level field must be
+  present — the defaults, the sections, and the entries of the rate-limit lists.
+  Absent fields are a startup error naming the field, and there is no "inherits
+  whatever the binary happened to default to". A rule body stays sparse: that is
+  what "everything else is inherited" means, and the defaults are now in the same
+  file, in front of you.
 
 Start an explicit file from the relay's own output, so it cannot be missing a
 field:
@@ -99,31 +101,48 @@ strict file, because the switch is about the file being complete. Process
 settings (`-addr`, `-url`, `-db`, `-sweep-interval`) are not policy and are not
 covered.
 
-## One kind, one rule
+## The defaults, and what a rule adds
 
 A kind is served exactly when it is in `kinds.whitelist`. What the relay does
-with it comes from `rules`:
+with it is resolved in one direction only:
 
-- **A kind with a rule** does what the rule says. A field left zero means "no
-  restriction": `max_size: 0` is unlimited, no `required_tags` means none.
-  An explicit zero is a choice.
-- **A kind in the whitelist without a rule** gets the strictest defaults:
-  writes need authentication, reads are author-only. That is the safe reading
-  of a kind the operator did not say anything about — and it is exactly the
-  right default for utility kinds like 5 (deletions) on a relay built for
-  something else.
+> **top-level defaults ← the kind's rule**
+
+Every setting a rule names replaces the default; every setting it does not name
+keeps the default. So:
+
+- **A kind with a rule** overrides what it needs and inherits the rest.
+- **A kind in the whitelist without a rule** gets exactly the defaults. That is
+  what makes a new kind cheap to add: whitelist it, and it is already governed.
 - **A rule for a kind outside the whitelist** is a startup error, not a silent
   skip: the document contradicts itself.
+
+The one thing a rule cannot inherit is `shape`. It runs a validator registered
+for one specific kind (`policies/kinds.go`), so it is rule-local by nature: a
+newly whitelisted kind would inherit a flag it could never honour. Set `"shape":
+true` on the kinds that have one.
+
+`errors` is the other half-inherited setting: the tables merge key by key, so a
+kind can reword one rejection without repeating the rest.
+
+An **explicit zero is a choice**: `"max_size": 0` in a rule means "unlimited"
+even when the default is `4KB`, and `"required_tags": []` means "none" even when
+the default demands tags. In a document, "I named it" and "I did not" are
+different things; a `KindRule` built in Go is the exception, because Go has no
+way to leave a field unset — a struct literal is fully explicit.
 
 Replacing the whitelist (in the file or with `BKIND_KINDS`/`-kinds`) prunes the
 rules of the kinds it drops, so narrowing what is served cannot leave a stale
 rule behind.
 
-### The rule fields
+### The per-kind settings
+
+These names are the same at the top level (as defaults) and inside a rule (as
+overrides).
 
 | Field | Zero value | Meaning |
 |---|---|---|
-| `description` | `""` | operator documentation; not sent anywhere |
+| `description` | `""` | operator documentation; not sent anywhere — a rule only, it has no default |
 | `write.allow` | anyone | `"*"` or a list of the only pubkeys that may publish this kind |
 | `read.allow` | anyone | `"*"` or a list of the only pubkeys that may query this kind |
 | `read.privileged` | public | author-only (or author + `p` recipient) reads; see below |
@@ -137,7 +156,7 @@ rule behind.
 | `tag_patterns` | none | tag name → regular expression every value of that tag must match |
 | `tag_limits` | none | `max_tags`, `max_tag_name_chars`, `max_tag_value_chars` |
 | `rate_limits` | none | write limits for this kind: `{scope, limit, window}` |
-| `shape` | off | run the registered structural validator for this kind (registry in `policies/kinds.go`) |
+| `shape` | off | run the registered structural validator for this kind (registry in `policies/kinds.go`); a rule only, never inherited |
 | `errors` | built-ins | rejection message templates, see below |
 
 Durations accept three notations, everywhere: a bare number is seconds
@@ -161,8 +180,10 @@ is derived from the same answer:
 pubkeys may query it, and live delivery agrees with the read policy.
 
 Reads are cross-kind (a filter can span kinds), so read rate limits are
-relay-wide (`reads.rate_limits`), and connection limits have their own section
-(`connections.rate_limits`, per ip). Write limits live on the kind they bound.
+relay-wide (`read_limits`), and connection limits have their own key
+(`connection_limits`, per ip). Write limits — `rate_limits` — live on the kind
+they bound, which is why the same field name appears at the top level: as the
+default write limits.
 Every limit is one token bucket: `limit` events per `window` per `scope`
 (`npub` = the author's key, `ip` = the remote address); the bucket size is the
 limit itself.
@@ -225,8 +246,8 @@ Messages keep their NIP-01 prefixes (`auth-required:`, `blocked:`, `invalid:`,
 | `kinds.reject_unserved_filters` | reject a `REQ` for an unserved kind instead of narrowing it (default `true`) |
 | `filters.reject_empty` | refuse a filter with no kind, id, author or tag |
 | `filters.reject_search` | refuse `search` queries |
-| `reads.rate_limits` | REQ limits, `npub` or `ip` |
-| `connections.rate_limits` | connect limits, `ip` only |
+| `read_limits` | REQ limits, `npub` or `ip` — relay-wide, because one REQ spans kinds |
+| `connection_limits` | connect limits, `ip` only |
 | `count.reject` | refuse NIP-45 `COUNT` (metadata leak); `false` serves it and advertises NIP-45 |
 | `nip11.*` | name, description and the advertised limits; `supported_nips` is derived, `extra_nips` appends |
 | `negentropy` | NIP-77 set reconciliation (leaks which event ids exist) |
@@ -253,32 +274,39 @@ go run ./examples/bkind
 
 ### A public note relay
 
-One kind, wide open — the rule is present and zero, which is the explicit
-choice, not an accident:
+Defaults that suit a public kind, and no rules at all — the kind inherits them:
 
 ```json
 {
   "kinds": {"whitelist": [1]},
-  "rules": {"1": {"description": "public notes", "max_size": "8KB"}},
+  "read": {"allow": "*"},
+  "require_auth": false,
+  "max_size": "8KB",
+  "max_expiration": 0,
+  "p_tag": "",
+  "required_tags": [],
+  "rate_limits": [{"scope": "ip", "limit": 60, "window": "1h"}],
   "count": {"reject": false}
 }
 ```
 
 ### Kind 4 plus NIP-17 gift wraps
 
+The DM defaults stay, and the new kind names only what differs:
+
 ```json
 {
   "kinds": {"whitelist": [4, 5, 62, 1059]},
   "rules": {
-    "1059": {"description": "gift wraps", "read": {"privileged": true}, "p_tag": "hex",
-              "max_size": "64KB", "max_expiration": "P3D"}
+    "1059": {"description": "gift wraps", "max_size": "64KB", "max_expiration": "P3D", "require_auth": false}
   }
 }
 ```
 
-A `1059` reaches its author and its `p`, and a filter must pin one of them. A
-gift wrap is signed by a throwaway key, so leave `require_auth` off for it (it
-is off: the rule says so by not setting it).
+A `1059` reaches its author and its `p` (inherited: `read.privileged` and
+`p_tag: "hex"`), and a filter must pin one of them. A gift wrap is signed by a
+throwaway key, so `require_auth: false` turns off the inherited NIP-42 check for
+that kind alone.
 
 ### The summary spelling
 
@@ -301,8 +329,9 @@ The same kind rule as a policy table:
 }
 ```
 
-Kind 1059 is whitelisted without a rule, so it is served with the strictest
-defaults — authenticated writes, author-only reads — until it gets one.
+The top-level fields were left out of that document, so this is a patch: they
+keep the reference relay's values, and kind 1059 — whitelisted with no rule at
+all — is served with them too (authenticated writes, privileged reads).
 
 ## What is still not configurable
 
@@ -323,15 +352,17 @@ process settings:
 
 ## Tests
 
-`policies/config_test.go` covers the defaults, the per-kind merge (an existing
-rule patched, a new rule from zero, pruning on whitelist change), both
-spellings and their conflicts, every duration and size notation, strict mode
-(every field required — sections, rule bodies, gates, rate limit entries — with
-the error naming the field, and the round trip from `-print-config` back
-through `WithStrictJSON`), the validation errors, the strictest defaults for
-an unruled kind, allow lists on both sides, the age window, tag patterns, error
-templates, per-kind differences (one kind demands an expiration, another does
-not), NIP-11 derivation, and keeps `bkind.example.json` byte-for-byte equal to
+`policies/config_test.go` covers the defaults, the inheritance (`TestDefaultsApply
+ToSparseRules`: an unnamed setting comes from the defaults, a named one wins, an
+explicit zero turns off, and the relay honours the result), `shape` never being
+inherited, the per-kind merge (an existing rule patched, pruning on whitelist
+change), both spellings and their conflicts, every duration and size notation,
+strict mode (every top-level field required, the error naming the field, sparse
+rule bodies accepted, misspellings inside them refused, and the round trip from
+`-print-config` back through `WithStrictJSON`), the validation errors,
+allow lists on both sides, the age window, tag patterns, error templates,
+per-kind differences (one kind demands an expiration, another does not), NIP-11
+derivation, and keeps `bkind.example.json` byte-for-byte equal to
 `DefaultConfig().JSON()`. `policies/config_strict_test.go` reflects over
 `Config` and `KindRule` to keep the hand-written strict schema from falling
 behind the structs. `TestKindRulesGatesAgree` asserts that write, read, `COUNT`

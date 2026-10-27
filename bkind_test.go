@@ -99,11 +99,12 @@ func newRelayWithConfig(t *testing.T, serviceURL string, mutate func(*policies.C
 
 	cfg := policies.DefaultConfig()
 	// the tests speak far faster than the production limits allow
+	cfg.RateLimits = nil
 	for _, rule := range cfg.Rules {
 		rule.RateLimits = nil
 	}
-	cfg.Reads.RateLimits = nil
-	cfg.Connections.RateLimits = nil
+	cfg.ReadLimits = nil
+	cfg.ConnectionLimits = nil
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -919,8 +920,10 @@ func TestBKindKindsAreConfigurable(t *testing.T) {
 		// per-kind dialect makes explicit
 		c.Rules["1"] = &policies.KindRule{
 			Description: "public notes",
-			Write:       policies.WriteGate{Allow: policies.AllowList{"*"}},
-			Read:        policies.ReadGate{Allow: policies.AllowList{"*"}},
+			RuleSettings: policies.RuleSettings{
+				Write: policies.WriteGate{Allow: policies.AllowList{"*"}},
+				Read:  policies.ReadGate{Allow: policies.AllowList{"*"}},
+			},
 		}
 	})
 	server := httptest.NewServer(relay)

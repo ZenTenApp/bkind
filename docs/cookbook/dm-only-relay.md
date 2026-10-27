@@ -231,7 +231,8 @@ if err := cfg.Wire(relay); err != nil { ... }
 
 ```go
 k.RestrictKind(),            // the whitelist
-c.writePolicy(),             // the checks of the event's own kind, in this order:
+c.writePolicy(),             // the checks of the event's own effective rule —
+// the top-level defaults with the kind's rule laid over them — in this order:
 //   write.allow, require_auth, max_age_of_event, max_age_event_in_future,
 //   max_expiration + required_tags, tag_patterns, max_size, tag_limits,
 //   p_tag, the shape validator, the kind's write rate limits

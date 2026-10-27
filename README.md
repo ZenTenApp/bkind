@@ -31,7 +31,7 @@ in [`examples/bkind/main.go`](./examples/bkind/main.go).
 | **Max size 4 KB** | `len(content) <= 4096` bytes. The limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `max_size` per kind (`MaxContentLen` under it) |
 | **Mandatory tags** | Exactly one non-empty `client` tag, and the mandatory `expiration` tag above. | `required_tags` per kind (`RequireTag` under it) |
 | **Authenticated** | NIP-42 on writes and reads. The author of an event must equal the authenticated key. Rejections use the `auth-required:` prefix so clients know to authenticate and retry. | `require_auth` per kind (`RequireAuthedAuthor` under it) |
-| **Rate limits: 1h, 1d, per npub, per ip** | Writes: 30/hour and 200/day per npub; 60/hour and 400/day per IP, per kind. Reads: 60/hour and 400/day per npub; 120/hour and 800/day per IP. Connections: 120/hour per IP. | `rate_limits` per kind, `reads.rate_limits`, `connections.rate_limits` |
+| **Rate limits: 1h, 1d, per npub, per ip** | Writes: 30/hour and 200/day per npub; 60/hour and 400/day per IP, per kind. Reads: 60/hour and 400/day per npub; 120/hour and 800/day per IP. Connections: 120/hour per IP. | `rate_limits` (per kind, defaulted at the top level), `read_limits`, `connection_limits` |
 | **Tag restrictions** | At most 16 tags; tag names at most 64 bytes; every tag value at most 256 bytes. Checked on every tag and every position, unlike `PreventLargeTags`. | `tag_limits` per kind (`TagShapeLimits` under it) |
 
 On top of the requirements, the Kind 4 shape is validated: exactly one `p` tag,
