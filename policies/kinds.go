@@ -10,64 +10,77 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// KindRules is the kind allowlist of a relay, expressed as data instead of as a
-// policy function with a literal in it. Every gate that has to know which kinds
-// are served — the write policy, the filter overwrite, the read policy, the COUNT
-// policy, live delivery and the NIP-11 document — is derived from one KindRules
-// value, so they cannot disagree.
+// visibility is who may see the events of a kind.
+type visibility uint8
+
+const (
+	// visibilityPublic: anyone within the kind's reader list.
+	visibilityPublic visibility = iota
+	// visibilityAuthorOnly: the author, within the reader list.
+	visibilityAuthorOnly
+	// visibilityRecipient: the author and the pubkey in the event's "p" tag.
+	visibilityRecipient
+)
+
+// kindAccess is the read side of one kind: its visibility class, whether NIP-42
+// is required to read it, and the explicit reader list (nil: anyone).
+type kindAccess struct {
+	visibility visibility
+	// requireAuth: reading this kind needs an authenticated connection.
+	requireAuth bool
+	// readers: nil means anyone; otherwise the only pubkeys allowed to read.
+	readers []string
+}
+
+// KindRules is the derived gate set of a relay. Every gate that has to know
+// which kinds are served — the write policy, the filter overwrite, the read
+// policy, the COUNT policy, live delivery and the NIP-11 document — is derived
+// from one KindRules value, so they cannot disagree.
 //
-// A kind belongs to at most one visibility class:
-//
-//   - RecipientVisible: readable by its author and by the pubkey in its "p" tag
-//     (Kind 4 and, for other relay shapes, Kind 1059 gift wraps and Kind 14 DMs);
-//   - AuthorOnly: readable by its author only (Kind 5, Kind 62);
-//   - neither: served, but rejected on read unless the filter pins the author,
-//     which is the strictest class and the default for an unclassified kind.
+// The value is built from the per-kind rules by Config.kindRules. A kind in
+// Allowed without a rule gets the strictest access: readable by its author
+// only, after authentication.
 type KindRules struct {
 	// Allowed is the complete set of kinds the relay accepts and serves.
-	Allowed []uint16 `json:"allowed"`
-	// RecipientVisible is the subset readable by author and "p" recipient.
-	RecipientVisible []uint16 `json:"recipient_visible"`
-	// AuthorOnly is the subset readable by author only.
-	AuthorOnly []uint16 `json:"author_only"`
+	Allowed []uint16
 	// AllowEphemeral lets every ephemeral kind through without listing it.
-	AllowEphemeral bool `json:"allow_ephemeral"`
+	AllowEphemeral bool
 	// RejectUnservedFilters makes a REQ naming a kind outside Allowed fail with
 	// "restricted: kind N is not served by this relay" instead of being silently
 	// narrowed to the served kinds. A filter that lists no kinds at all is still
 	// expanded to Allowed.
-	RejectUnservedFilters bool `json:"reject_unserved_filters"`
+	RejectUnservedFilters bool
+
+	// access holds the read rules of every kind in Allowed, by kind.
+	access map[uint16]kindAccess
 }
 
-// Validate checks that the set is internally consistent. It is what turns a typo in
-// a config file into a startup error instead of a relay that accepts a kind it
-// cannot serve.
+// newKindRules builds the gate set from the allowlist and the per-kind access
+// rules. Kinds without an access entry (which must not happen for kinds in
+// Allowed when built by Config.kindRules) read as the strictest class.
+func newKindRules(allowed []uint16, allowEphemeral, rejectUnserved bool, access map[uint16]kindAccess) KindRules {
+	return KindRules{
+		Allowed:               allowed,
+		AllowEphemeral:        allowEphemeral,
+		RejectUnservedFilters: rejectUnserved,
+		access:                access,
+	}
+}
+
+// Validate checks the invariants the gate set itself can break: an empty
+// allowlist would serve nothing, and an ephemeral kind listed without
+// allow_ephemeral would be accepted by the filter policy and rejected on write.
 func (k KindRules) Validate() error {
 	if len(k.Allowed) == 0 {
-		return fmt.Errorf("kinds.allowed is empty: the relay would serve nothing")
+		return fmt.Errorf("kinds.whitelist is empty: the relay would serve nothing")
 	}
 
-	allowed := k.Sorted()
-	for _, kind := range allowed {
+	for _, kind := range k.Allowed {
 		if kind == 0 {
-			return fmt.Errorf("kinds.allowed contains kind 0, which is not a valid kind to serve")
+			return fmt.Errorf("kinds.whitelist contains kind 0, which is not a valid kind to serve")
 		}
 		if nostr.IsEphemeralKind(int(kind)) && !k.AllowEphemeral {
-			return fmt.Errorf("kinds.allowed contains the ephemeral kind %d but allow_ephemeral is false: it would be accepted by the filter policy and rejected on write", kind)
-		}
-	}
-
-	for _, kind := range k.RecipientVisible {
-		if !slices.Contains(allowed, kind) {
-			return fmt.Errorf("kinds.recipient_visible contains kind %d, which is not in kinds.allowed", kind)
-		}
-		if slices.Contains(k.AuthorOnly, kind) {
-			return fmt.Errorf("kind %d is listed in both kinds.recipient_visible and kinds.author_only", kind)
-		}
-	}
-	for _, kind := range k.AuthorOnly {
-		if !slices.Contains(allowed, kind) {
-			return fmt.Errorf("kinds.author_only contains kind %d, which is not in kinds.allowed", kind)
+			return fmt.Errorf("kinds.whitelist contains the ephemeral kind %d but kinds.allow_ephemeral is false: it would be accepted by the filter policy and rejected on write", kind)
 		}
 	}
 
@@ -87,18 +100,8 @@ func (k KindRules) Has(kind uint16) bool {
 	return slices.Contains(k.Allowed, kind)
 }
 
-// IsRecipientVisible reports whether kind is readable by its author and its "p".
-func (k KindRules) IsRecipientVisible(kind uint16) bool {
-	return slices.Contains(k.RecipientVisible, kind)
-}
-
-// IsAuthorOnly reports whether kind is readable by its author only.
-func (k KindRules) IsAuthorOnly(kind uint16) bool {
-	return slices.Contains(k.AuthorOnly, kind)
-}
-
-// list renders a kind set for a rejection message: "4, 5 and 62".
-func (k KindRules) list() string {
+// List renders a kind set for a log line: "4, 5 and 62".
+func (k KindRules) List() string {
 	kinds := make([]string, 0, len(k.Allowed))
 	for _, kind := range k.Sorted() {
 		kinds = append(kinds, fmt.Sprintf("%d", kind))
@@ -114,8 +117,8 @@ func (k KindRules) list() string {
 	}
 }
 
-// RestrictKind is the write policy: anything outside Allowed, and any ephemeral kind
-// unless AllowEphemeral, is rejected.
+// RestrictKind is the write gate: anything outside Allowed, and any ephemeral
+// kind unless AllowEphemeral, is rejected.
 func (k KindRules) RestrictKind() func(context.Context, *nostr.Event) (bool, string) {
 	// the allowlist is sorted in place by the policy, so hand it a copy: Allowed is
 	// also what OverwriteFilters and the NIP-11 document read
@@ -160,31 +163,59 @@ func (k KindRules) OverwriteFilters() func(context.Context, *nostr.Filter) {
 	}
 }
 
-// ReadFilter is the read policy: deny by default, require auth, refuse a kind the
-// relay does not serve rather than narrowing it, then require the filter to pin the
-// authenticated pubkey in the place that makes the matching events visible.
+// accessFor returns the read rules of a served kind. A kind in Allowed without
+// an access entry reads as the strictest class, which is also the default for
+// a kind the config gave no rule.
+func (k KindRules) accessFor(kind uint16) kindAccess {
+	if acc, ok := k.access[kind]; ok {
+		return acc
+	}
+	return kindAccess{visibility: visibilityAuthorOnly, requireAuth: true}
+}
+
+// ReadFilter is the read policy: refuse a kind the relay does not serve, then
+// ask of the filter what the matched kinds require — authentication for kinds
+// that need it, a pinned author (or "#p") for privileged kinds, membership in
+// the reader list for kinds that have one. A filter of only public kinds is
+// answered for anyone, which is what makes a mixed relay possible.
 func (k KindRules) ReadFilter(ctx context.Context, filter nostr.Filter) (bool, string) {
 	authed := bkind.GetAuthed(ctx)
-	if authed == "" {
+
+	kinds := filter.Kinds
+	if len(kinds) == 0 {
+		for _, kind := range k.Sorted() {
+			kinds = append(kinds, int(kind))
+		}
+	}
+
+	needAuth, pinAuthors, pinEither := false, false, false
+	for _, kind := range kinds {
+		if !k.Has(uint16(kind)) {
+			return true, fmt.Sprintf("restricted: kind %d is not served by this relay", kind)
+		}
+
+		acc := k.accessFor(uint16(kind))
+		if acc.requireAuth || acc.visibility != visibilityPublic {
+			needAuth = true
+		}
+		switch acc.visibility {
+		case visibilityAuthorOnly:
+			pinAuthors = true
+		case visibilityRecipient:
+			pinEither = true
+		}
+		if acc.readers != nil && !slices.Contains(acc.readers, authed) {
+			return true, "restricted: your key is not allowed to read this kind on this relay"
+		}
+	}
+
+	if needAuth && authed == "" {
 		return true, "auth-required: this relay requires authentication (NIP-42)"
 	}
 
-	matchesRecipientVisible, matchesAuthorOnly := false, false
-	if len(filter.Kinds) == 0 {
-		matchesRecipientVisible, matchesAuthorOnly = true, true
-	}
-	for _, kind := range filter.Kinds {
-		switch {
-		case k.IsRecipientVisible(uint16(kind)):
-			matchesRecipientVisible = true
-		case k.IsAuthorOnly(uint16(kind)):
-			matchesAuthorOnly = true
-		case k.Has(uint16(kind)):
-			// served, but not classified: author-only is the strictest reading
-			matchesAuthorOnly = true
-		default:
-			return true, fmt.Sprintf("restricted: kind %d is not served by this relay", kind)
-		}
+	// public kinds only: nothing to pin
+	if !pinAuthors && !pinEither {
+		return false, ""
 	}
 
 	sendersPinned := len(filter.Authors) > 0
@@ -200,13 +231,16 @@ func (k KindRules) ReadFilter(ctx context.Context, filter nostr.Filter) (bool, s
 		}
 	}
 
-	recipientVisibleOnly := matchesRecipientVisible && !matchesAuthorOnly
-
-	if recipientVisibleOnly && !sendersPinned && !receiversPinned {
-		return true, "restricted: events of this kind are only visible to their author and their recipient, pin \"authors\" or \"#p\" to your own pubkey"
+	if pinAuthors {
+		if !sendersPinned {
+			return true, "restricted: events of this kind are only readable by their author, pin \"authors\" to your own pubkey"
+		}
+		return false, ""
 	}
-	if !recipientVisibleOnly && !sendersPinned {
-		return true, "restricted: events of this kind are only readable by their author, pin \"authors\" to your own pubkey"
+
+	// only recipient-visible kinds matched: the author or the recipient may read
+	if !sendersPinned && !receiversPinned {
+		return true, "restricted: events of this kind are only visible to their author and their recipient, pin \"authors\" or \"#p\" to your own pubkey"
 	}
 
 	return false, ""
@@ -218,18 +252,31 @@ func (k KindRules) RejectCount(ctx context.Context, filter nostr.Filter) (bool, 
 	return k.ReadFilter(ctx, filter)
 }
 
-// PreventBroadcast is a PreventBroadcast hook: live delivery does not re-run the
-// filter policies, so a subscription whose REQ was rejected would otherwise keep
-// receiving matching events for the life of the connection. It returns true when the
-// event must not be written to that connection.
+// PreventBroadcast is a PreventBroadcast hook: live delivery does not re-run
+// the filter policies, so a subscription whose REQ was rejected would otherwise
+// keep receiving matching events for the life of the connection. It returns true
+// when the event must not be written to that connection.
 func (k KindRules) PreventBroadcast(ws *bkind.WebSocket, evt *nostr.Event) bool {
-	authed := ws.AuthedPublicKey
-	if authed == "" {
+	if !k.Has(uint16(evt.Kind)) {
+		// not served at all: never deliver it, whoever is asking
 		return true
 	}
 
-	switch {
-	case k.IsRecipientVisible(uint16(evt.Kind)):
+	acc := k.accessFor(uint16(evt.Kind))
+	authed := ws.AuthedPublicKey
+	if (acc.requireAuth || acc.visibility != visibilityPublic) && authed == "" {
+		return true
+	}
+	if acc.readers != nil && !slices.Contains(acc.readers, authed) {
+		return true
+	}
+
+	switch acc.visibility {
+	case visibilityPublic:
+		return false
+	case visibilityAuthorOnly:
+		return authed != evt.PubKey
+	case visibilityRecipient:
 		if authed == evt.PubKey {
 			return false
 		}
@@ -239,22 +286,16 @@ func (k KindRules) PreventBroadcast(ws *bkind.WebSocket, evt *nostr.Event) bool 
 			}
 		}
 		return true
-	case k.IsAuthorOnly(uint16(evt.Kind)):
-		return authed != evt.PubKey
-	case k.Has(uint16(evt.Kind)):
-		// served but not classified: author-only is the strictest reading
-		return authed != evt.PubKey
-	default:
-		// not served at all: never deliver it, whoever is asking
-		return true
 	}
+
+	return true
 }
 
 // KindShapeValidator is a per-kind structural validator, such as ValidateKind4Shape.
 type KindShapeValidator func(context.Context, *nostr.Event) (bool, string)
 
 // kindShapeValidators is the registry of shape validators the framework ships. A
-// config names the kinds to validate; the functions themselves cannot live in JSON.
+// kind rule turns its validator on; the functions themselves cannot live in JSON.
 var kindShapeValidators = map[uint16]KindShapeValidator{
 	4:  ValidateKind4Shape,
 	5:  ValidateKind5Shape,

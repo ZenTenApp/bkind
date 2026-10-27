@@ -2,90 +2,208 @@ package policies
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/ZenTenApp/bkind"
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
 )
 
-// Config is the whole policy set of a relay as data. Every limit, kind and rate
-// limit that used to be a literal in a wiring file lives here, so the same binary
-// can serve a Kind-4 DM relay, a NIP-17 gift-wrap relay or a single-kind relay
-// without a code change.
+// Config is the whole policy set of a relay as data, keyed by kind. Every limit
+// that used to be a relay-wide section is a field of the kind it belongs to, so
+// the same binary can serve a NIP-04 DM relay, a NIP-17 gift-wrap relay or a
+// single-kind backup relay without a code change.
 //
 // Load it with LoadConfig, which layers the defaults, a JSON file (BKIND_CONFIG),
-// inline JSON (BKIND_CONFIG_JSON) and BKIND_* environment overrides, in that order.
-// The zero value is not usable; DefaultConfig is.
+// inline JSON (BKIND_CONFIG_JSON) and BKIND_KINDS, in that order. The zero value
+// is not usable; DefaultConfig is.
+//
+// The document may spell the kinds section as "kind" or "kinds", and the rules
+// may live under "rules" or directly at the top level keyed by kind number;
+// everything else is canonical.
 type Config struct {
-	Kinds      KindRules       `json:"kinds"`
-	Expiration ExpirationRules `json:"expiration"`
-	Tags       TagRules        `json:"tags"`
-	Content    ContentRules    `json:"content"`
-	Auth       AuthRules       `json:"auth"`
-	Count      CountRules      `json:"count"`
-	Validation ValidationRules `json:"validation"`
-	Filters    FilterRules     `json:"filters"`
-	RateLimits []RateLimit     `json:"rate_limits"`
-	NIP11      NIP11Rules      `json:"nip11"`
-	Negentropy bool            `json:"negentropy"`
+	Kinds       KindWhitelist        `json:"kinds"`
+	Rules       map[string]*KindRule `json:"rules"`
+	Filters     FilterRules          `json:"filters"`
+	Reads       ReadsRules           `json:"reads"`
+	Connections ConnectionsRules     `json:"connections"`
+	Count       CountRules           `json:"count"`
+	NIP11       NIP11Rules           `json:"nip11"`
+	Negentropy  bool                 `json:"negentropy"`
 }
 
-// ExpirationRules is NIP-40: whether an "expiration" tag is mandatory and how far
-// in the future it may point.
-type ExpirationRules struct {
-	Required bool   `json:"required"`
-	Max      string `json:"max"`
-
-	max time.Duration
+// KindWhitelist is what the relay serves at all.
+type KindWhitelist struct {
+	// Whitelist is the complete set of kinds the relay accepts and serves.
+	Whitelist []uint16 `json:"whitelist"`
+	// AllowEphemeral lets every ephemeral kind (20000-29999) through without
+	// listing each one.
+	AllowEphemeral bool `json:"allow_ephemeral"`
+	// RejectUnservedFilters makes a REQ naming a kind outside the whitelist
+	// fail with a reason instead of being silently narrowed.
+	RejectUnservedFilters bool `json:"reject_unserved_filters"`
 }
 
-// MaxDuration returns the parsed Max, which Validate fills in.
-func (e ExpirationRules) MaxDuration() time.Duration { return e.max }
-
-// TagRules is the shape of the tag list and the tags an event must carry.
-type TagRules struct {
-	// Required names the tags an event must carry exactly once, with a non-empty
-	// value. An empty list means no mandatory tags.
-	Required []string `json:"required"`
-	// Max is the maximum number of tags on an event.
-	Max int `json:"max"`
-	// MaxNameLen and MaxValueLen bound every tag name and every tag value.
-	MaxNameLen  int `json:"max_name_len"`
-	MaxValueLen int `json:"max_value_len"`
+// KindRule is everything the relay does with one kind, on the write side and on
+// the read side. A kind in the whitelist without a rule is served with the
+// strictest defaults (authenticated writes, author-only reads); a rule that is
+// present but leaves a field zero means "no restriction" for that field — an
+// explicit zero is a choice, an absent rule is not.
+type KindRule struct {
+	// Description documents the kind for the operator; it is not sent anywhere.
+	Description string `json:"description"`
+	// Write is who may publish this kind.
+	Write WriteGate `json:"write"`
+	// Read is who may query this kind, and whether its events are privileged.
+	Read ReadGate `json:"read"`
+	// RequireAuth is NIP-42: publishing requires authentication and the author
+	// must be the authenticated key.
+	RequireAuth bool `json:"require_auth"`
+	// MaxSize is the content limit in bytes. Zero means unlimited.
+	MaxSize Size `json:"max_size"`
+	// MaxExpiration caps how far a NIP-40 "expiration" tag may point. Zero means
+	// no cap.
+	MaxExpiration Duration `json:"max_expiration"`
+	// MaxAge rejects events created_at further in the past than this. Zero
+	// means no limit.
+	MaxAge Duration `json:"max_age_of_event"`
+	// MaxFutureAge rejects events created_at further in the future than this —
+	// the clock-skew allowance. Zero means no limit.
+	MaxFutureAge Duration `json:"max_age_event_in_future"`
+	// PTag names the "p" tag rule; "hex" requires exactly one "p" tag with a
+	// valid pubkey that is not the author, which is also what makes a
+	// privileged kind recipient-visible. Empty means no p rule.
+	PTag string `json:"p_tag"`
+	// RequiredTags must each appear exactly once with a non-empty value.
+	// "expiration" here means a mandatory NIP-40 tag.
+	RequiredTags []string `json:"required_tags"`
+	// TagPatterns bounds tag values: tag name -> regular expression. A pattern
+	// only checks tags that appear; requiring one is RequiredTags' job.
+	TagPatterns map[string]string `json:"tag_patterns"`
+	// TagLimits bounds the tag list itself.
+	TagLimits TagLimits `json:"tag_limits"`
+	// RateLimits bounds writes of this kind.
+	RateLimits []RateLimit `json:"rate_limits"`
+	// Shape runs the registered structural validator for this kind
+	// (policies/kinds.go), when there is one.
+	Shape bool `json:"shape"`
+	// Errors overrides the rejection messages with templates:
+	// "blocked: event exceeds size limit ({size} > {limit})".
+	Errors map[string]string `json:"errors"`
 }
 
-// ContentRules is the payload limit, in bytes of event content.
-type ContentRules struct {
-	Max int `json:"max"`
+// ruleAliases are the short field names accepted for their canonical twins, so
+// a summary-style document ("size_limit", "must_have_tags") and the full one
+// ("max_size", "required_tags") are the same config.
+var ruleAliases = map[string]string{
+	"size_limit":          "max_size",
+	"max_expiry_duration": "max_expiration",
+	"must_have_tags":      "required_tags",
+	"identifier_regex":    "tag_patterns",
+	"privileged":          "read",
 }
 
-// AuthRules is NIP-42. When Required is set, both writes and reads must be
-// authenticated and the write author must equal the authenticated key.
-type AuthRules struct {
-	Required bool `json:"required"`
+// UnmarshalJSON decodes a kind rule, refusing unknown fields and alias/canonical
+// conflicts. It merges: a field absent from the document keeps its current
+// value, which is what makes a partial file a patch.
+func (r *KindRule) UnmarshalJSON(data []byte) error {
+	if strings.TrimSpace(string(data)) == "null" {
+		return nil
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	for alias, canonical := range ruleAliases {
+		if _, ok := raw[alias]; ok {
+			if _, ok := raw[canonical]; ok {
+				return fmt.Errorf("a kind rule has both %q and %q, which are the same setting", alias, canonical)
+			}
+		}
+	}
+
+	for _, key := range sortedKeys(raw) {
+		if err := r.applyField(key, raw[key]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// CountRules is NIP-45. Reject keeps COUNT refused, which is the only safe answer
-// for private events; setting it to false serves COUNT and advertises NIP-45.
-type CountRules struct {
-	Reject bool `json:"reject"`
+func (r *KindRule) applyField(key string, value json.RawMessage) error {
+	// "privileged" is the alias of read.privileged, and "identifier_regex"
+	// the alias of tag_patterns.d — both are shaped differently from their
+	// canonical twins, so they are handled before the remap
+	if key == "privileged" {
+		return json.Unmarshal(value, &r.Read.Privileged)
+	}
+	if key == "identifier_regex" {
+		var pattern string
+		if err := json.Unmarshal(value, &pattern); err != nil {
+			return err
+		}
+		if r.TagPatterns == nil {
+			r.TagPatterns = map[string]string{}
+		}
+		r.TagPatterns["d"] = pattern
+		return nil
+	}
+	if alias, ok := ruleAliases[key]; ok {
+		key = alias
+	}
+
+	switch key {
+	case "description":
+		return json.Unmarshal(value, &r.Description)
+	case "write":
+		return strictUnmarshal(value, &r.Write)
+	case "read":
+		return strictUnmarshal(value, &r.Read)
+	case "require_auth":
+		return json.Unmarshal(value, &r.RequireAuth)
+	case "max_size":
+		return json.Unmarshal(value, &r.MaxSize)
+	case "max_expiration":
+		return json.Unmarshal(value, &r.MaxExpiration)
+	case "max_age_of_event":
+		return json.Unmarshal(value, &r.MaxAge)
+	case "max_age_event_in_future":
+		return json.Unmarshal(value, &r.MaxFutureAge)
+	case "p_tag":
+		return json.Unmarshal(value, &r.PTag)
+	case "required_tags":
+		r.RequiredTags = nil
+		return strictUnmarshal(value, &r.RequiredTags)
+	case "tag_patterns":
+		r.TagPatterns = nil
+		return strictUnmarshal(value, &r.TagPatterns)
+	case "tag_limits":
+		return strictUnmarshal(value, &r.TagLimits)
+	case "rate_limits":
+		r.RateLimits = nil
+		return strictUnmarshal(value, &r.RateLimits)
+	case "shape":
+		return json.Unmarshal(value, &r.Shape)
+	case "errors":
+		r.Errors = nil
+		return strictUnmarshal(value, &r.Errors)
+	default:
+		return fmt.Errorf("unknown field %q in a kind rule", key)
+	}
 }
 
-// ValidationRules selects the per-kind structural validators. ShapeKinds is
-// intersected with kinds.allowed, so a kind the relay does not serve is simply not
-// validated; naming a kind that has no registered validator is an error.
-type ValidationRules struct {
-	ShapeKinds []uint16 `json:"shape_kinds"`
+func sortedKeys(raw map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // FilterRules are the request-shape policies.
@@ -94,24 +212,22 @@ type FilterRules struct {
 	RejectSearch bool `json:"reject_search"`
 }
 
-// RateLimit is one token bucket. Scope is event, filter or connection; Key is ip,
-// authed or pubkey. Connection limits only support the ip key.
-type RateLimit struct {
-	Scope    string `json:"scope"`
-	Key      string `json:"key"`
-	Tokens   int    `json:"tokens"`
-	Interval string `json:"interval"`
-	Max      int    `json:"max"`
-
-	interval time.Duration
+// ReadsRules bounds REQs. Read limits are relay-wide because a filter can span
+// kinds; write limits live on the kind.
+type ReadsRules struct {
+	RateLimits []RateLimit `json:"rate_limits"`
 }
 
-func (r RateLimit) String() string {
-	return fmt.Sprintf("%s/%s %d per %s (burst %d)", r.Scope, r.Key, r.Tokens, r.Interval, r.Max)
+// ConnectionsRules bounds connects per IP.
+type ConnectionsRules struct {
+	RateLimits []RateLimit `json:"rate_limits"`
 }
 
-// intervalDuration returns the parsed interval, which Validate fills in.
-func (r RateLimit) intervalDuration() time.Duration { return r.interval }
+// CountRules is NIP-45. Reject keeps COUNT refused, which is the only safe answer
+// for private events; setting it to false serves COUNT and advertises NIP-45.
+type CountRules struct {
+	Reject bool `json:"reject"`
+}
 
 // NIP11Rules is the relay information document. SupportedNIPs and the limitation
 // document are derived from the rest of the Config, so advertising a feature the
@@ -128,44 +244,58 @@ type NIP11Rules struct {
 	ExtraNIPs []int `json:"extra_nips"`
 }
 
-// DefaultConfig is the policy set of the reference relay in examples/bkind: NIP-04
-// direct messages plus the two utility kinds needed to operate them, authenticated,
-// expiring, size-limited, and rate-limited per npub and per ip.
+// DefaultConfig is the policy set of the reference relay in examples/bkind:
+// NIP-04 direct messages plus the two utility kinds needed to operate them,
+// authenticated, expiring, size-limited, and rate-limited per npub and per ip.
 //
-// The rate limits are opinionated; a test that does not want them should set
-// cfg.RateLimits = nil before wiring.
+// The rate limits are opinionated; a test that does not want them should clear
+// them before wiring.
 func DefaultConfig() Config {
+	writeLimits := []RateLimit{
+		{Scope: "npub", Limit: 30, Window: Duration{time.Hour}},
+		{Scope: "npub", Limit: 200, Window: Duration{24 * time.Hour}},
+		{Scope: "ip", Limit: 60, Window: Duration{time.Hour}},
+		{Scope: "ip", Limit: 400, Window: Duration{24 * time.Hour}},
+	}
+	dmTags := TagLimits{MaxTags: 16, MaxNameChars: 64, MaxValueChars: 256}
+
+	rule := func(description, pTag string) *KindRule {
+		return &KindRule{
+			Description:   description,
+			Write:         WriteGate{Allow: AllowList{"*"}},
+			Read:          ReadGate{Allow: AllowList{"*"}, Privileged: true},
+			RequireAuth:   true,
+			MaxSize:       Size{Bytes: 4096},
+			MaxExpiration: Duration{75 * time.Hour},
+			RequiredTags:  []string{"expiration", "client"},
+			PTag:          pTag,
+			TagLimits:     dmTags,
+			RateLimits:    writeLimits,
+			Shape:         true,
+		}
+	}
+
 	return Config{
-		Kinds: KindRules{
-			Allowed:               []uint16{4, 5, 62},
-			RecipientVisible:      []uint16{4},
-			AuthorOnly:            []uint16{5, 62},
-			AllowEphemeral:        false,
+		Kinds: KindWhitelist{
+			Whitelist:             []uint16{4, 5, 62},
 			RejectUnservedFilters: true,
 		},
-		Expiration: ExpirationRules{Required: true, Max: "75h"},
-		Tags: TagRules{
-			Required:    []string{"client"},
-			Max:         16,
-			MaxNameLen:  64,
-			MaxValueLen: 256,
+		Rules: map[string]*KindRule{
+			"4":  rule("NIP-04 direct messages", "hex"),
+			"5":  rule("NIP-09 deletion requests", ""),
+			"62": rule("NIP-62 vanish requests", ""),
 		},
-		Content:    ContentRules{Max: 4096},
-		Auth:       AuthRules{Required: true},
-		Count:      CountRules{Reject: true},
-		Validation: ValidationRules{ShapeKinds: []uint16{4, 5, 62}},
-		Filters:    FilterRules{RejectEmpty: true, RejectSearch: true},
-		RateLimits: []RateLimit{
-			{Scope: "event", Key: "authed", Tokens: 30, Interval: "1h", Max: 60},
-			{Scope: "event", Key: "authed", Tokens: 200, Interval: "24h", Max: 400},
-			{Scope: "event", Key: "ip", Tokens: 60, Interval: "1h", Max: 120},
-			{Scope: "event", Key: "ip", Tokens: 400, Interval: "24h", Max: 800},
-			{Scope: "filter", Key: "authed", Tokens: 60, Interval: "1h", Max: 120},
-			{Scope: "filter", Key: "authed", Tokens: 400, Interval: "24h", Max: 800},
-			{Scope: "filter", Key: "ip", Tokens: 120, Interval: "1h", Max: 240},
-			{Scope: "filter", Key: "ip", Tokens: 800, Interval: "24h", Max: 1600},
-			{Scope: "connection", Key: "ip", Tokens: 120, Interval: "1h", Max: 240},
-		},
+		Filters: FilterRules{RejectEmpty: true, RejectSearch: true},
+		Reads: ReadsRules{RateLimits: []RateLimit{
+			{Scope: "npub", Limit: 60, Window: Duration{time.Hour}},
+			{Scope: "npub", Limit: 400, Window: Duration{24 * time.Hour}},
+			{Scope: "ip", Limit: 120, Window: Duration{time.Hour}},
+			{Scope: "ip", Limit: 800, Window: Duration{24 * time.Hour}},
+		}},
+		Connections: ConnectionsRules{RateLimits: []RateLimit{
+			{Scope: "ip", Limit: 120, Window: Duration{time.Hour}},
+		}},
+		Count: CountRules{Reject: true},
 		NIP11: NIP11Rules{
 			Name:             "B Kind",
 			MaxMessageLength: 12 * 1024,
@@ -178,8 +308,8 @@ func DefaultConfig() Config {
 }
 
 // LoadConfig builds the configuration for a relay: defaults, then the JSON file
-// named by BKIND_CONFIG, then the inline JSON in BKIND_CONFIG_JSON, then the scalar
-// BKIND_* overrides, then Validate.
+// named by BKIND_CONFIG, then the inline JSON in BKIND_CONFIG_JSON, then
+// BKIND_KINDS, then Validate.
 //
 // lookup is os.LookupEnv in production and a map in tests.
 func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
@@ -220,10 +350,10 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 
 // WithJSON merges a JSON document onto the receiver. Fields absent from the
 // document keep their current value, so a file only has to name what it changes.
-// A rate_limits array replaces the whole list, because a half-merged list of token
-// buckets would be a trap. When the document replaces kinds.allowed, the visibility
-// classes and shape validators of the kinds it dropped are pruned with it, exactly
-// as BKIND_KINDS does.
+// A rules map merges per kind: a rule for a kind already configured patches that
+// kind's rule, a rule for a new kind adds it. A document that replaces
+// kinds.whitelist prunes the rules of the kinds it drops, exactly as SetKinds
+// does.
 //
 // Use WithStrictJSON when the document must stand on its own.
 func (c Config) WithJSON(data []byte) (Config, error) {
@@ -231,32 +361,42 @@ func (c Config) WithJSON(data []byte) (Config, error) {
 }
 
 // WithStrictJSON is WithJSON for an explicit configuration: every field must be
-// present in the document, so what the relay does is what the file says rather than
-// what the file did not mention. It is what BKIND_CONFIG_STRICT turns on, and it is
-// the right mode for a config kept in version control.
+// present in the document, so what the relay does is what the file says rather
+// than what the file did not mention. It is what BKIND_CONFIG_STRICT turns on,
+// and it is the right mode for a config kept in version control.
 //
-// The document still starts from the receiver, so c.WithStrictJSON is normally called
-// on the zero Config (or on DefaultConfig, which is the same once every field is
-// present). Completeness is checked against the JSON, not against the receiver: a
-// field that is present but null or zero is still a mistake, and Validate says so.
+// Completeness is checked against the JSON, not against the receiver: a field
+// that is present but zero means "off", and that is a choice the document made.
 func (c Config) WithStrictJSON(data []byte) (Config, error) {
 	return c.withJSON(data, true)
 }
 
-// JSON renders the configuration as the canonical document WithStrictJSON accepts:
-// every field spelled out, in a stable order, so it can be diffed, reviewed and fed
-// back. This is what the relay prints for -print-config.
+// JSON renders the configuration as the canonical document WithStrictJSON
+// accepts: every field spelled out, in a stable order, so it can be diffed,
+// reviewed and fed back. This is what the relay prints for -print-config.
 func (c Config) JSON() ([]byte, error) {
+	// the rules are pointers; clone them so the nil-to-empty normalization below
+	// cannot reach back into the receiver
 	out := c
-	// a nil slice and an empty one mean the same thing; print the empty one so the
-	// document reads as "none" instead of "null"
-	out.Kinds.Allowed = nonNil(c.Kinds.Allowed)
-	out.Kinds.RecipientVisible = nonNil(c.Kinds.RecipientVisible)
-	out.Kinds.AuthorOnly = nonNil(c.Kinds.AuthorOnly)
-	out.Tags.Required = nonNil(c.Tags.Required)
-	out.Validation.ShapeKinds = nonNil(c.Validation.ShapeKinds)
-	out.NIP11.ExtraNIPs = nonNil(c.NIP11.ExtraNIPs)
-	out.RateLimits = nonNil(c.RateLimits)
+	out.Rules = make(map[string]*KindRule, len(c.Rules))
+	for key, rule := range c.Rules {
+		if rule == nil {
+			continue
+		}
+		clone := *rule
+		clone.RequiredTags = nonNil(clone.RequiredTags)
+		clone.RateLimits = nonNil(clone.RateLimits)
+		clone.TagPatterns = nonNilMap(clone.TagPatterns)
+		clone.Errors = nonNilMap(clone.Errors)
+		clone.Write.Allow = nonNil(clone.Write.Allow)
+		clone.Read.Allow = nonNil(clone.Read.Allow)
+		out.Rules[key] = &clone
+	}
+
+	out.Kinds.Whitelist = nonNil(out.Kinds.Whitelist)
+	out.Reads.RateLimits = nonNil(out.Reads.RateLimits)
+	out.Connections.RateLimits = nonNil(out.Connections.RateLimits)
+	out.NIP11.ExtraNIPs = nonNil(out.NIP11.ExtraNIPs)
 
 	indented, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
@@ -270,6 +410,13 @@ func nonNil[E any](s []E) []E {
 		return []E{}
 	}
 	return s
+}
+
+func nonNilMap[E any](m map[string]E) map[string]E {
+	if m == nil {
+		return map[string]E{}
+	}
+	return m
 }
 
 var (
@@ -315,24 +462,121 @@ func joinLines(match []byte, open, close, sep string) []byte {
 	return []byte(out + close)
 }
 
+// normalizeDocument folds the accepted synonyms into the canonical shape: "kind"
+// becomes "kinds", and top-level kind-number keys become entries of "rules". It
+// runs before anything else, so strict mode, the completeness check and the
+// decoder all see one document.
+func normalizeDocument(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	if top == nil {
+		return data, nil
+	}
+
+	// "kind" is accepted as a synonym of "kinds"
+	if raw, ok := top["kind"]; ok {
+		if _, exists := top["kinds"]; exists {
+			return nil, fmt.Errorf("the document has both \"kind\" and \"kinds\": name the section once")
+		}
+		top["kinds"] = raw
+		delete(top, "kind")
+	}
+
+	// kind-number keys at the top level are rules: {"4": {...}} means rules.4
+	var merged map[string]json.RawMessage
+	if raw, ok := top["rules"]; ok {
+		if err := json.Unmarshal(raw, &merged); err != nil {
+			return nil, fmt.Errorf("rules must be an object keyed by kind number: %w", err)
+		}
+	}
+	moved := false
+	for key := range top {
+		if slices.Contains([]string{"rules", "kinds", "filters", "reads", "connections", "count", "nip11", "negentropy"}, key) {
+			continue
+		}
+		if _, err := strconv.ParseUint(key, 10, 16); err != nil {
+			continue // an unknown non-numeric key: the decoder will name it
+		}
+		if merged == nil {
+			merged = map[string]json.RawMessage{}
+		}
+		if _, exists := merged[key]; exists {
+			return nil, fmt.Errorf("kind %s is defined twice in the document", key)
+		}
+		merged[key] = top[key]
+		delete(top, key)
+		moved = true
+	}
+	if moved || len(merged) > 0 {
+		body, err := json.Marshal(merged)
+		if err != nil {
+			return nil, err
+		}
+		top["rules"] = body
+	}
+
+	return json.Marshal(top)
+}
+
 func (c Config) withJSON(data []byte, strict bool) (Config, error) {
+	normalized, err := normalizeDocument(data)
+	if err != nil {
+		return c, err
+	}
+
 	if strict {
-		if err := checkComplete(data); err != nil {
+		if err := checkComplete(normalized); err != nil {
 			return c, err
 		}
 	}
 
-	// a lenient first pass, only to learn whether kinds.allowed was given
+	// a lenient first pass, only to learn whether the whitelist was replaced
 	var patch struct {
 		Kinds struct {
-			Allowed *[]uint16 `json:"allowed"`
+			Whitelist *[]uint16 `json:"whitelist"`
 		} `json:"kinds"`
 	}
-	if err := json.Unmarshal(data, &patch); err == nil && patch.Kinds.Allowed != nil {
-		c.SetKinds(*patch.Kinds.Allowed)
+	if err := json.Unmarshal(normalized, &patch); err == nil && patch.Kinds.Whitelist != nil {
+		c.pruneRules(*patch.Kinds.Whitelist)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(data))
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(normalized, &top); err != nil {
+		return c, fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	// the rules merge by hand: the encoding/json map layer decodes every entry
+	// onto a fresh zero value, which would turn a patch into a wipe. Merging
+	// here keeps "absent field keeps its value" true for a rule that already
+	// exists, while a rule for a new kind starts from zero.
+	if raw, ok := top["rules"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		var entries map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return c, fmt.Errorf("rules must be an object keyed by kind number: %w", err)
+		}
+		if c.Rules == nil {
+			c.Rules = map[string]*KindRule{}
+		}
+		for _, key := range sortedKeys(entries) {
+			rule, exists := c.Rules[key]
+			if !exists || rule == nil {
+				rule = &KindRule{}
+				c.Rules[key] = rule
+			}
+			if err := json.Unmarshal(entries[key], rule); err != nil {
+				return c, fmt.Errorf("rules.%s: %w", key, err)
+			}
+		}
+		delete(top, "rules")
+		normalized, err = json.Marshal(top)
+		if err != nil {
+			return c, err
+		}
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(normalized))
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(&c); err != nil {
@@ -341,9 +585,9 @@ func (c Config) withJSON(data []byte, strict bool) (Config, error) {
 	return c, nil
 }
 
-// ApplyEnv overrides the scalar settings from the environment. Structured values
-// (the kind sets, the rate limits) are reachable through BKIND_CONFIG_JSON; the
-// variables here are the ones worth setting on a command line.
+// ApplyEnv overrides the settings worth a command line: the whitelist (which
+// prunes the rules of the kinds it drops) and the NIP-11 name and description.
+// Everything else belongs in the document.
 func (c *Config) ApplyEnv(lookup func(string) (string, bool)) error {
 	if raw, ok := lookup("BKIND_KINDS"); ok && strings.TrimSpace(raw) != "" {
 		kinds, err := parseKinds("BKIND_KINDS", raw)
@@ -352,399 +596,35 @@ func (c *Config) ApplyEnv(lookup func(string) (string, bool)) error {
 		}
 		c.SetKinds(kinds)
 	}
-	if raw, ok := lookup("BKIND_RECIPIENT_VISIBLE_KINDS"); ok && strings.TrimSpace(raw) != "" {
-		kinds, err := parseKinds("BKIND_RECIPIENT_VISIBLE_KINDS", raw)
-		if err != nil {
-			return err
-		}
-		c.Kinds.RecipientVisible = kinds
-	}
-	if raw, ok := lookup("BKIND_AUTHOR_ONLY_KINDS"); ok && strings.TrimSpace(raw) != "" {
-		kinds, err := parseKinds("BKIND_AUTHOR_ONLY_KINDS", raw)
-		if err != nil {
-			return err
-		}
-		c.Kinds.AuthorOnly = kinds
-	}
-	if raw, ok := lookup("BKIND_SHAPE_KINDS"); ok && strings.TrimSpace(raw) != "" {
-		kinds, err := parseKinds("BKIND_SHAPE_KINDS", raw)
-		if err != nil {
-			return err
-		}
-		c.Validation.ShapeKinds = kinds
-	}
-
-	var err error
-	if c.Kinds.AllowEphemeral, err = envBool(lookup, "BKIND_ALLOW_EPHEMERAL", c.Kinds.AllowEphemeral); err != nil {
-		return err
-	}
-	if c.Kinds.RejectUnservedFilters, err = envBool(lookup, "BKIND_REJECT_UNSERVED_FILTERS", c.Kinds.RejectUnservedFilters); err != nil {
-		return err
-	}
-	if c.Expiration.Required, err = envBool(lookup, "BKIND_REQUIRE_EXPIRATION", c.Expiration.Required); err != nil {
-		return err
-	}
-	if c.Auth.Required, err = envBool(lookup, "BKIND_REQUIRE_AUTH", c.Auth.Required); err != nil {
-		return err
-	}
-	if c.Count.Reject, err = envBool(lookup, "BKIND_REJECT_COUNT", c.Count.Reject); err != nil {
-		return err
-	}
-	if c.Negentropy, err = envBool(lookup, "BKIND_NEGENTROPY", c.Negentropy); err != nil {
-		return err
-	}
-	if c.Filters.RejectEmpty, err = envBool(lookup, "BKIND_REJECT_EMPTY_FILTERS", c.Filters.RejectEmpty); err != nil {
-		return err
-	}
-	if c.Filters.RejectSearch, err = envBool(lookup, "BKIND_REJECT_SEARCH", c.Filters.RejectSearch); err != nil {
-		return err
-	}
-
-	if raw, ok := lookup("BKIND_MAX_EXPIRATION"); ok && raw != "" {
-		c.Expiration.Max = raw
-	}
-	if raw, ok := lookup("BKIND_REQUIRED_TAGS"); ok {
-		c.Tags.Required = splitList(raw)
-	}
-	if c.Tags.Max, err = envInt(lookup, "BKIND_MAX_TAGS", c.Tags.Max); err != nil {
-		return err
-	}
-	if c.Tags.MaxNameLen, err = envInt(lookup, "BKIND_MAX_TAG_NAME", c.Tags.MaxNameLen); err != nil {
-		return err
-	}
-	if c.Tags.MaxValueLen, err = envInt(lookup, "BKIND_MAX_TAG_VALUE", c.Tags.MaxValueLen); err != nil {
-		return err
-	}
-	if c.Content.Max, err = envInt(lookup, "BKIND_MAX_CONTENT", c.Content.Max); err != nil {
-		return err
-	}
-	if c.NIP11.MaxMessageLength, err = envInt(lookup, "BKIND_MAX_MESSAGE_LENGTH", c.NIP11.MaxMessageLength); err != nil {
-		return err
-	}
-	if c.NIP11.MaxSubscriptions, err = envInt(lookup, "BKIND_MAX_SUBSCRIPTIONS", c.NIP11.MaxSubscriptions); err != nil {
-		return err
-	}
-	if c.NIP11.MaxFilters, err = envInt(lookup, "BKIND_MAX_FILTERS", c.NIP11.MaxFilters); err != nil {
-		return err
-	}
-	if c.NIP11.MaxLimit, err = envInt(lookup, "BKIND_MAX_LIMIT", c.NIP11.MaxLimit); err != nil {
-		return err
-	}
-
 	if raw, ok := lookup("BKIND_NAME"); ok {
 		c.NIP11.Name = raw
 	}
 	if raw, ok := lookup("BKIND_DESCRIPTION"); ok {
 		c.NIP11.Description = raw
 	}
-
 	return nil
 }
 
-// SetKinds replaces the allowlist and drops the visibility classes and shape
-// validators of kinds that are no longer served, so narrowing the allowlist cannot
-// leave a stale class behind. The environment and the command line both go through
-// it.
+// SetKinds replaces the whitelist and drops the rules of kinds that are no
+// longer served, so narrowing the whitelist cannot leave a stale rule behind.
+// The environment and the command line both go through it.
 func (c *Config) SetKinds(kinds []uint16) {
-	c.Kinds.Allowed = kinds
-	c.Kinds.RecipientVisible = intersectKinds(c.Kinds.RecipientVisible, kinds)
-	c.Kinds.AuthorOnly = intersectKinds(c.Kinds.AuthorOnly, kinds)
-	c.Validation.ShapeKinds = intersectKinds(c.Validation.ShapeKinds, kinds)
+	c.Kinds.Whitelist = kinds
+	c.pruneRules(kinds)
 }
 
-// Validate checks the configuration and fills in the parsed durations. It is run by
-// LoadConfig and again by Wire, so a Config built in code cannot skip it.
-func (c *Config) Validate() error {
-	// nil and empty are the same setting; normalizing keeps a config parsed from
-	// JSON comparable to one built in code
-	if len(c.Kinds.RecipientVisible) == 0 {
-		c.Kinds.RecipientVisible = nil
-	}
-	if len(c.Kinds.AuthorOnly) == 0 {
-		c.Kinds.AuthorOnly = nil
-	}
-	if len(c.Tags.Required) == 0 {
-		c.Tags.Required = nil
-	}
-	if len(c.Validation.ShapeKinds) == 0 {
-		c.Validation.ShapeKinds = nil
-	}
-	if len(c.RateLimits) == 0 {
-		c.RateLimits = nil
-	}
-	if len(c.NIP11.ExtraNIPs) == 0 {
-		c.NIP11.ExtraNIPs = nil
-	}
-
-	if err := c.Kinds.Validate(); err != nil {
-		return err
-	}
-
-	if c.Expiration.Required || c.Expiration.Max != "" {
-		if c.Expiration.Max == "" {
-			return fmt.Errorf("expiration.max is empty")
-		}
-		max, err := time.ParseDuration(c.Expiration.Max)
-		if err != nil || max <= 0 {
-			return fmt.Errorf("expiration.max %q is not a positive duration", c.Expiration.Max)
-		}
-		c.Expiration.max = max
-	}
-
-	seenTags := map[string]bool{}
-	for _, name := range c.Tags.Required {
-		if name == "" {
-			return fmt.Errorf("tags.required contains an empty tag name")
-		}
-		if seenTags[name] {
-			return fmt.Errorf("tags.required names %q twice", name)
-		}
-		seenTags[name] = true
-	}
-	if c.Tags.Max <= 0 {
-		return fmt.Errorf("tags.max must be positive")
-	}
-	if c.Tags.MaxNameLen <= 0 || c.Tags.MaxValueLen <= 0 {
-		return fmt.Errorf("tags.max_name_len and tags.max_value_len must be positive")
-	}
-	if c.Content.Max <= 0 {
-		return fmt.Errorf("content.max must be positive")
-	}
-
-	for _, kind := range c.Validation.ShapeKinds {
-		if !c.Kinds.Has(kind) {
-			return fmt.Errorf("validation.shape_kinds contains kind %d, which is not in kinds.allowed", kind)
-		}
-		if ShapeValidator(kind) == nil {
-			return fmt.Errorf("validation.shape_kinds contains kind %d, which has no registered shape validator", kind)
-		}
-	}
-
-	for i := range c.RateLimits {
-		rl := &c.RateLimits[i]
-		switch rl.Scope {
-		case "event", "filter", "connection":
-		default:
-			return fmt.Errorf("rate_limits[%d]: scope %q must be event, filter or connection", i, rl.Scope)
-		}
-		switch rl.Key {
-		case "ip", "authed", "pubkey":
-		default:
-			return fmt.Errorf("rate_limits[%d]: key %q must be ip, authed or pubkey", i, rl.Key)
-		}
-		if rl.Scope == "connection" && rl.Key != "ip" {
-			return fmt.Errorf("rate_limits[%d]: connection limits only support the ip key", i)
-		}
-		if rl.Tokens <= 0 || rl.Max <= 0 {
-			return fmt.Errorf("rate_limits[%d]: tokens and max must be positive", i)
-		}
-		interval, err := time.ParseDuration(rl.Interval)
-		if err != nil || interval <= 0 {
-			return fmt.Errorf("rate_limits[%d]: interval %q is not a positive duration", i, rl.Interval)
-		}
-		rl.interval = interval
-	}
-
-	if c.NIP11.MaxMessageLength <= 0 || c.NIP11.MaxSubscriptions <= 0 ||
-		c.NIP11.MaxFilters <= 0 || c.NIP11.MaxLimit <= 0 {
-		return fmt.Errorf("nip11 limits must be positive")
-	}
-	for _, nip := range c.NIP11.ExtraNIPs {
-		if nip <= 0 {
-			return fmt.Errorf("nip11.extra_nips contains %d, which is not a NIP number", nip)
-		}
-	}
-
-	return nil
-}
-
-// Wire installs the whole policy set on a relay. Every gate that decides which
-// kinds are served is derived from the same Config, so the write policy, the filter
-// overwrite, the read policy, COUNT, live delivery and NIP-11 cannot disagree.
-//
-// It does not touch the store, the expiration sweeper or ServiceURL: those stay
-// explicit in the wiring file.
-func (c Config) Wire(relay *bkind.Relay) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
-
-	relay.Negentropy = c.Negentropy
-
-	// ---------------------------------------------------------------- writes
-	writePolicies := []func(context.Context, *nostr.Event) (bool, string){
-		c.Kinds.RestrictKind(),
-	}
-	if c.Auth.Required {
-		writePolicies = append(writePolicies, RequireAuthedAuthor)
-	}
-	if c.Expiration.Required {
-		writePolicies = append(writePolicies, RequireExpiration(c.Expiration.MaxDuration()))
-	}
-	for _, name := range c.Tags.Required {
-		writePolicies = append(writePolicies, RequireTag(name))
-	}
-	// the size limits come before the per-kind shape rules: an oversized event
-	// should hear about its size, not about a tag it never got to write
-	writePolicies = append(writePolicies,
-		MaxContentLen(c.Content.Max),
-		TagShapeLimits(c.Tags.Max, c.Tags.MaxNameLen, c.Tags.MaxValueLen),
-	)
-	for _, kind := range c.Validation.ShapeKinds {
-		writePolicies = append(writePolicies, ShapeValidator(kind))
-	}
-
-	for _, rl := range c.RateLimits {
-		if rl.Scope != "event" {
+// pruneRules deletes the rules of kinds outside keep. Keys that are not kind
+// numbers are left alone: Validate names them.
+func (c *Config) pruneRules(keep []uint16) {
+	for key := range c.Rules {
+		kind, err := strconv.ParseUint(key, 10, 16)
+		if err != nil {
 			continue
 		}
-		switch rl.Key {
-		case "ip":
-			writePolicies = append(writePolicies, EventIPRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
-		case "authed":
-			writePolicies = append(writePolicies, EventAuthedPubKeyRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
-		case "pubkey":
-			writePolicies = append(writePolicies, EventPubKeyRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
+		if !slices.Contains(keep, uint16(kind)) {
+			delete(c.Rules, key)
 		}
 	}
-	relay.RejectEvent = append(relay.RejectEvent, writePolicies...)
-
-	// ----------------------------------------------------------------- reads
-	relay.OverwriteFilter = append(relay.OverwriteFilter, c.Kinds.OverwriteFilters())
-
-	readPolicies := make([]func(context.Context, nostr.Filter) (bool, string), 0, len(c.RateLimits)+4)
-	if c.Auth.Required {
-		readPolicies = append(readPolicies, MustAuth)
-	}
-	readPolicies = append(readPolicies, c.Kinds.ReadFilter)
-	if c.Filters.RejectEmpty {
-		readPolicies = append(readPolicies, NoEmptyFilters)
-	}
-	if c.Filters.RejectSearch {
-		readPolicies = append(readPolicies, NoSearchQueries)
-	}
-	for _, rl := range c.RateLimits {
-		if rl.Scope != "filter" {
-			continue
-		}
-		switch rl.Key {
-		case "ip":
-			readPolicies = append(readPolicies, FilterIPRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
-		case "authed":
-			readPolicies = append(readPolicies, FilterAuthedPubKeyRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
-		}
-	}
-	relay.RejectFilter = append(relay.RejectFilter, readPolicies...)
-
-	if c.Count.Reject {
-		countPolicies := make([]func(context.Context, nostr.Filter) (bool, string), 0, 2)
-		if c.Auth.Required {
-			countPolicies = append(countPolicies, MustAuth)
-		}
-		countPolicies = append(countPolicies, c.Kinds.RejectCount)
-		relay.RejectCountFilter = append(relay.RejectCountFilter, countPolicies...)
-	}
-
-	// live delivery does not re-run the filter policies
-	relay.PreventBroadcast = append(relay.PreventBroadcast, c.Kinds.PreventBroadcast)
-
-	var rejectConnection []func(*http.Request) bool
-	for _, rl := range c.RateLimits {
-		if rl.Scope == "connection" {
-			rejectConnection = append(rejectConnection, ConnectionRateLimiter(rl.Tokens, rl.intervalDuration(), rl.Max))
-		}
-	}
-	relay.RejectConnection = append(relay.RejectConnection, rejectConnection...)
-
-	// --------------------------------------------------------------- NIP-11
-	return c.applyNIP11(relay)
-}
-
-// applyNIP11 derives the information document from the configuration.
-func (c Config) applyNIP11(relay *bkind.Relay) error {
-	relay.Info.Name = c.NIP11.Name
-	relay.Info.Description = c.NIP11.Description
-	if relay.Info.Description == "" {
-		relay.Info.Description = c.Kinds.defaultDescription()
-	}
-
-	nips := map[int]bool{11: true}
-	for _, kind := range c.Kinds.Sorted() {
-		switch kind {
-		case 4:
-			nips[4] = true // encrypted direct messages
-		case 5:
-			nips[9] = true // event deletion
-		case 62:
-			nips[62] = true // request to vanish
-		}
-	}
-	if c.Expiration.Required {
-		nips[40] = true
-	}
-	if c.Auth.Required {
-		nips[42] = true
-	}
-	if !c.Count.Reject {
-		nips[45] = true
-	}
-	if c.Negentropy {
-		nips[77] = true
-	}
-	for _, nip := range c.NIP11.ExtraNIPs {
-		nips[nip] = true
-	}
-
-	supported := make([]any, 0, len(nips))
-	for nip := range nips {
-		supported = append(supported, nip)
-	}
-	slices.SortFunc(supported, func(a, b any) int {
-		return a.(int) - b.(int)
-	})
-	relay.Info.SupportedNIPs = supported
-
-	// HandleNIP11 adds 9, 45 and 77 on its own when the store has DeleteEvent,
-	// CountEvents or Negentropy wired. Those are facts about the wiring, not about
-	// what this relay will actually answer — a COUNT is refused here — so the served
-	// document keeps exactly the derived list.
-	relay.OverwriteRelayInformation = append(relay.OverwriteRelayInformation,
-		func(ctx context.Context, r *http.Request, info nip11.RelayInformationDocument) nip11.RelayInformationDocument {
-			info.SupportedNIPs = supported
-			return info
-		})
-
-	relay.Info.Limitation = &nip11.RelayLimitationDocument{
-		MaxMessageLength: c.NIP11.MaxMessageLength,
-		MaxEventTags:     c.Tags.Max,
-		MaxContentLength: c.Content.Max,
-		MaxSubscriptions: c.NIP11.MaxSubscriptions,
-		MaxFilters:       c.NIP11.MaxFilters,
-		MaxLimit:         c.NIP11.MaxLimit,
-		AuthRequired:     c.Auth.Required,
-		RestrictedWrites: c.Auth.Required,
-	}
-
-	return nil
-}
-
-// defaultDescription is generated from the kind list, so the NIP-11 document cannot
-// claim "Kind 4 only" after the allowlist changed.
-func (k KindRules) defaultDescription() string {
-	var parts []string
-	for _, kind := range k.Sorted() {
-		switch kind {
-		case 4:
-			parts = append(parts, "Kind 4 direct messages")
-		case 5:
-			parts = append(parts, "Kind 5 deletions")
-		case 62:
-			parts = append(parts, "Kind 62 vanish requests")
-		default:
-			parts = append(parts, fmt.Sprintf("Kind %d events", kind))
-		}
-	}
-	return strings.Join(parts, ", ") + " only."
 }
 
 func splitList(raw string) []string {
@@ -772,19 +652,6 @@ func parseKinds(name, raw string) ([]uint16, error) {
 	return out, nil
 }
 
-func intersectKinds(have, keep []uint16) []uint16 {
-	out := make([]uint16, 0, len(have))
-	for _, kind := range have {
-		for _, k := range keep {
-			if kind == k {
-				out = append(out, kind)
-				break
-			}
-		}
-	}
-	return out
-}
-
 func envBool(lookup func(string) (string, bool), key string, fallback bool) (bool, error) {
 	raw, ok := lookup(key)
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -795,92 +662,4 @@ func envBool(lookup func(string) (string, bool), key string, fallback bool) (boo
 		return fallback, fmt.Errorf("%s: %q is not a boolean", key, raw)
 	}
 	return value, nil
-}
-
-func envInt(lookup func(string) (string, bool), key string, fallback int) (int, error) {
-	raw, ok := lookup(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return fallback, nil
-	}
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil {
-		return fallback, fmt.Errorf("%s: %q is not a number", key, raw)
-	}
-	return value, nil
-}
-
-// strictSections is the JSON schema an explicit configuration has to satisfy: every
-// field of every section must be present. It is written out by hand rather than
-// reflected so that adding a field to Config without adding it here is a compile-time
-// neighbour in the same file, not a silent gap — TestStrictSchemaCoversEveryField
-// keeps the two honest.
-var strictSections = map[string][]string{
-	"kinds":      {"allowed", "recipient_visible", "author_only", "allow_ephemeral", "reject_unserved_filters"},
-	"expiration": {"required", "max"},
-	"tags":       {"required", "max", "max_name_len", "max_value_len"},
-	"content":    {"max"},
-	"auth":       {"required"},
-	"count":      {"reject"},
-	"validation": {"shape_kinds"},
-	"filters":    {"reject_empty", "reject_search"},
-	"nip11":      {"name", "description", "max_message_length", "max_subscriptions", "max_filters", "max_limit", "extra_nips"},
-}
-
-// strictTopLevel is the set of keys the document itself must carry.
-var strictTopLevel = []string{
-	"kinds", "expiration", "tags", "content", "auth", "count", "validation",
-	"filters", "rate_limits", "nip11", "negentropy",
-}
-
-// strictRateLimitKeys is the shape of every entry of rate_limits.
-var strictRateLimitKeys = []string{"scope", "key", "tokens", "interval", "max"}
-
-// checkComplete reports the first field a strict-mode document leaves out. It works
-// on the raw JSON because presence is exactly what a decoded struct loses: an absent
-// "auth.required" and an explicit false decode to the same value, and for a relay the
-// difference between "I chose this" and "I never said" is the whole point.
-func checkComplete(data []byte) error {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(data, &top); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-	if top == nil {
-		return fmt.Errorf("incomplete configuration: the document is empty, but strict mode requires every field (start from -print-config)")
-	}
-
-	for _, key := range strictTopLevel {
-		if _, ok := top[key]; !ok {
-			return missingField(key)
-		}
-	}
-
-	for section, keys := range strictSections {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(top[section], &fields); err != nil {
-			return fmt.Errorf("incomplete configuration: %q must be an object with every field", section)
-		}
-		for _, key := range keys {
-			if _, ok := fields[key]; !ok {
-				return missingField(section + "." + key)
-			}
-		}
-	}
-
-	var limits []map[string]json.RawMessage
-	if err := json.Unmarshal(top["rate_limits"], &limits); err != nil {
-		return fmt.Errorf("incomplete configuration: %q must be an array", "rate_limits")
-	}
-	for i, entry := range limits {
-		for _, key := range strictRateLimitKeys {
-			if _, ok := entry[key]; !ok {
-				return missingField(fmt.Sprintf("rate_limits[%d].%s", i, key))
-			}
-		}
-	}
-
-	return nil
-}
-
-func missingField(name string) error {
-	return fmt.Errorf("incomplete configuration: %q is missing, and strict mode (BKIND_CONFIG_STRICT) requires every field — run with -print-config to get a complete document", name)
 }

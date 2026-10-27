@@ -108,10 +108,8 @@ BKIND_DB=/var/lib/bkind
 # how often expired events are swept out of the store
 BKIND_SWEEP_INTERVAL=5m
 
-# write rules (must match what your NIP-11 document promises)
-BKIND_MAX_EXPIRATION=75h
-BKIND_MAX_CONTENT=4096
-BKIND_MAX_TAGS=16
+# the policy set is the JSON document (below); the write rules live in it, per
+# kind, so that the file and the NIP-11 document cannot drift apart
 ```
 
 ```sh
@@ -125,17 +123,12 @@ sudo editor /etc/bkind/bkind.env
 | `BKIND_ADDR` | `-addr` | `:3334` | listen address |
 | `BKIND_DB` | `-db` | empty | store directory; empty means in-memory |
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | expired-event sweep period |
-| `BKIND_CONFIG` | — | empty | JSON policy file (kinds, limits, rate limits) |
-| `BKIND_KINDS` | `-kinds` | `4,5,62` | kinds the relay serves |
-| `BKIND_MAX_EXPIRATION` | `-max-expiration` | `75h` | longest accepted NIP-40 expiration |
-| `BKIND_REQUIRE_EXPIRATION` | `-require-expiration` | `true` | mandatory NIP-40 tag |
-| `BKIND_REQUIRED_TAGS` | `-required-tags` | `client` | mandatory tags, comma-separated |
-| `BKIND_MAX_CONTENT` | `-max-content` | `4096` | max content bytes |
-| `BKIND_MAX_TAGS` | `-max-tags` | `16` | max tags per event |
-| `BKIND_MAX_TAG_NAME` | `-max-tag-name` | `64` | max tag name bytes |
-| `BKIND_MAX_TAG_VALUE` | `-max-tag-value` | `256` | max tag value bytes |
-| `BKIND_REQUIRE_AUTH` | `-require-auth` | `true` | NIP-42 on reads and writes |
-| `BKIND_REJECT_COUNT` | `-reject-count` | `true` | refuse NIP-45 `COUNT` |
+| `BKIND_CONFIG` | — | empty | JSON policy file, keyed by kind; see [Configuring a relay](./configuration.md) |
+| `BKIND_CONFIG_JSON` | — | empty | the same document inline |
+| `BKIND_CONFIG_STRICT` | — | `false` | require every field in the policy file |
+| `BKIND_KINDS` | `-kinds` | `4,5,62` | kinds the relay serves; drops the rules of kinds it leaves out |
+| `BKIND_NAME` | `-name` | `B Kind` | relay name in the NIP-11 document |
+| `BKIND_DESCRIPTION` | `-description` | derived | description in the NIP-11 document |
 
 Flags win over environment variables, so `bkind -db /tmp/x` overrides the file.
 
@@ -486,7 +479,7 @@ recent messages and for the vanish blocklist, not an archive.
 **Disk.** A message costs roughly its content plus ~1KB of indexes, and nothing
 lives longer than 75 hours, so steady-state usage is bounded by traffic: a
 thousand 1KB messages per day is a few tens of megabytes. Give it 10GB and forget
-about it, but do watch it if `BKIND_MAX_EXPIRATION` is raised.
+about it, but do watch it if a kind's `max_expiration` is raised.
 
 **Scaling.** This setup is one process on one box. Badger's directory lock rules
 out running two replicas on the same volume, and the rate limiters keep their
@@ -500,7 +493,7 @@ Scale up, not out.
 | `auth-required` forever, even with `--auth` | `BKIND_URL` does not match the URL the client uses (scheme, host, trailing path) |
 | Client sees `restricted: events of this kind are only visible...` | the client's filter does not pin `authors` or `#p` to its own pubkey |
 | Client sees `restricted: kind 7 is not served by this relay` | the client is talking to a DM relay; `kinds.reject_unserved_filters` is `true`, so a filter for an unserved kind is refused rather than emptied |
-| Connection closes with code 1009 | the frame exceeded `nip11.max_message_length` (12KB by default); content is capped at `content.max` (4KB), so this is usually a client sending something else |
+| Connection closes with code 1009 | the frame exceeded `nip11.max_message_length` (12KB by default); content is capped at the kind's `max_size` (4KB), so this is usually a client sending something else |
 | Service refuses to start with `invalid configuration:` | a policy file or `BKIND_*` variable failed validation; the message names the field, and the unit log has it verbatim |
 | `failed to open the database ... lock` | another `bkind` process already has the directory open |
 | Service starts then exits `status=1` | run `/usr/local/bin/bkind` by hand with the same environment file to see the error |

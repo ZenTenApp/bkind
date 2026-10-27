@@ -99,7 +99,11 @@ func newRelayWithConfig(t *testing.T, serviceURL string, mutate func(*policies.C
 
 	cfg := policies.DefaultConfig()
 	// the tests speak far faster than the production limits allow
-	cfg.RateLimits = nil
+	for _, rule := range cfg.Rules {
+		rule.RateLimits = nil
+	}
+	cfg.Reads.RateLimits = nil
+	cfg.Connections.RateLimits = nil
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -494,7 +498,7 @@ func TestBKindWriteRules(t *testing.T) {
 				evt.Sign(alice.sk)
 				return evt
 			},
-			reason: "cannot be addressed to its own author",
+			reason: "cannot be addressed to their own author",
 		},
 		{
 			name: "deletion without targets",
@@ -910,9 +914,14 @@ func TestBKindExpirationSweepOnStartup(t *testing.T) {
 // a reason the client can act on instead of returning a silent empty EOSE.
 func TestBKindKindsAreConfigurable(t *testing.T) {
 	relay, _ := newRelayWithConfig(t, "", func(c *policies.Config) {
-		c.Kinds.Allowed = []uint16{4, 5, 62, 1}
-		c.Kinds.AuthorOnly = []uint16{5, 62, 1}
-		c.Validation.ShapeKinds = []uint16{4, 5, 62}
+		c.Kinds.Whitelist = []uint16{4, 5, 62, 1}
+		// a public note kind: a rule with no restrictions, which is a choice the
+		// per-kind dialect makes explicit
+		c.Rules["1"] = &policies.KindRule{
+			Description: "public notes",
+			Write:       policies.WriteGate{Allow: policies.AllowList{"*"}},
+			Read:        policies.ReadGate{Allow: policies.AllowList{"*"}},
+		}
 	})
 	server := httptest.NewServer(relay)
 	defer server.Close()
@@ -956,11 +965,19 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay.json")
 	if err := os.WriteFile(path, []byte(`{
-		"kinds": {"allowed": [4], "recipient_visible": [4], "author_only": []},
-		"tags": {"required": ["client"], "max": 8},
-		"content": {"max": 64},
-		"validation": {"shape_kinds": [4]},
-		"rate_limits": []
+		"kinds": {"whitelist": [4]},
+		"rules": {
+			"4": {
+				"write": {"allow": "*"},
+				"read": {"allow": "*", "privileged": true},
+				"require_auth": true,
+				"max_size": 64,
+				"tag_limits": {"max_tags": 8, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
+				"required_tags": ["expiration", "client"],
+				"p_tag": "hex",
+				"shape": true
+			}
+		}
 	}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +1002,13 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 	alice := dial(t, server.URL)
 	alice.authenticate()
 
-	if res := alice.publishAuthed(dmEvent(t, alice.sk, alice.pk, strings.Repeat("x", 65))); res.OK || !strings.Contains(res.Reason, "too large") {
+	// a DM to a peer, oversized by one byte: the size limit is what the client
+	// should hear about, not the shape rules that follow it
+	peer, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := alice.publishAuthed(dmEvent(t, alice.sk, peer, strings.Repeat("x", 65))); res.OK || !strings.Contains(res.Reason, "too large") {
 		t.Fatalf("the JSON content limit is not enforced: ok=%v reason=%q", res.OK, res.Reason)
 	}
 

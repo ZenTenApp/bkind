@@ -23,20 +23,21 @@ the framework plus the DM relay and the policy set.
 nothing else. Every rule below is a policy in [`policies/`](./policies) wired up
 in [`examples/bkind/main.go`](./examples/bkind/main.go).
 
-| Requirement | Rule | Policy |
+| Requirement | Rule | Where it lives |
 |---|---|---|
-| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is `kinds.allowed` in the config, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `policies.KindRules`, fixed by `kinds.allowed` |
-| **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `KindRules.ReadFilter`, `KindRules.PreventBroadcast`, `KindRules.RejectCount` (the `DM*` functions are wrappers over the default kind set) |
-| **Mandatory expiration, max 75h** | Exactly one `expiration` tag, a unix timestamp, in the future and no further than 75 hours away. Expired events are filtered out of queries even before the background sweep deletes them. | `RequireExpiration(75 * time.Hour)` |
-| **Max size 4 KB** | `len(content) <= 4096` bytes. The limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `MaxContentLen(4096)` |
-| **Mandatory tags** | Exactly one non-empty `client` tag, and the mandatory `expiration` tag above. | `RequireTag("client")`, `RequireExpiration` |
-| **Authenticated** | NIP-42 on writes and reads. The author of an event must equal the authenticated key. Rejections use the `auth-required:` prefix so clients know to authenticate and retry. | `RequireAuthedAuthor`, `MustAuth` |
-| **Rate limits: 1h, 1d, per npub, per ip** | Writes: 30/hour and 200/day per npub; 60/hour and 400/day per IP. Reads: 60/hour and 400/day per npub; 120/hour and 800/day per IP. Connections: 120/hour per IP. | `EventAuthedPubKeyRateLimiter`, `EventIPRateLimiter`, `FilterAuthedPubKeyRateLimiter`, `FilterIPRateLimiter`, `ConnectionRateLimiter` |
-| **Tag restrictions** | At most 16 tags; tag names at most 64 bytes; every tag value at most 256 bytes. Checked on every tag and every position, unlike `PreventLargeTags`. | `TagShapeLimits(16, 64, 256)` |
+| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is `kinds.whitelist` in the config, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `kinds.whitelist` |
+| **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `read.privileged` per kind, derived into `KindRules.ReadFilter`, `KindRules.PreventBroadcast`, `KindRules.RejectCount` (the `DM*` functions are wrappers over the default kind set) |
+| **Mandatory expiration, max 75h** | Exactly one `expiration` tag, a unix timestamp, in the future and no further than 75 hours away. Expired events are filtered out of queries even before the background sweep deletes them. | `required_tags: ["expiration", …]` + `max_expiration: "75h"` per kind |
+| **Max size 4 KB** | `len(content) <= 4096` bytes. The limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `max_size` per kind (`MaxContentLen` under it) |
+| **Mandatory tags** | Exactly one non-empty `client` tag, and the mandatory `expiration` tag above. | `required_tags` per kind (`RequireTag` under it) |
+| **Authenticated** | NIP-42 on writes and reads. The author of an event must equal the authenticated key. Rejections use the `auth-required:` prefix so clients know to authenticate and retry. | `require_auth` per kind (`RequireAuthedAuthor` under it) |
+| **Rate limits: 1h, 1d, per npub, per ip** | Writes: 30/hour and 200/day per npub; 60/hour and 400/day per IP, per kind. Reads: 60/hour and 400/day per npub; 120/hour and 800/day per IP. Connections: 120/hour per IP. | `rate_limits` per kind, `reads.rate_limits`, `connections.rate_limits` |
+| **Tag restrictions** | At most 16 tags; tag names at most 64 bytes; every tag value at most 256 bytes. Checked on every tag and every position, unlike `PreventLargeTags`. | `tag_limits` per kind (`TagShapeLimits` under it) |
 
 On top of the requirements, the Kind 4 shape is validated: exactly one `p` tag,
 a 64-character hex pubkey, not the author, no `e`/`a`/`d` tags, and non-empty
-(encrypted) content. See `ValidateKind4Shape`.
+(encrypted) content. See `ValidateKind4Shape` — wired by `p_tag: "hex"` and
+`shape: true` on the kind's rule.
 
 ### Deliberate deviations from the original spec
 
@@ -122,12 +123,13 @@ BKIND_DB=./data go run ./examples/bkind # badger on disk, survives restarts
 
 It is the relay described above: authenticated Kind 4 messages, max 75 hours of
 retention, 4 KB of content, mandatory `expiration` and `client` tags, and the
-rate limits in the table. The whole policy set is data — `policies.Config` — and the
-relay loads it as defaults, then a JSON file, then environment variables, then flags:
+rate limits in the table. The whole policy set is data — `policies.Config`,
+keyed by kind — and the relay loads it as defaults, then a JSON file, then
+`BKIND_KINDS`, then flags:
 
 ```bash
 BKIND_CONFIG=/etc/bkind/bkind.json go run ./examples/bkind   # a file
-BKIND_KINDS=4,5,62 BKIND_MAX_CONTENT=2048 go run ./examples/bkind # variables
+BKIND_KINDS=4,5,62 go run ./examples/bkind                   # variables
 
 # an explicit configuration: the whole document, nothing inherited
 go run ./examples/bkind -print-config > bkind.json
@@ -143,27 +145,15 @@ BKIND_CONFIG=bkind.json BKIND_CONFIG_STRICT=true go run ./examples/bkind
 | `BKIND_URL` | `-url` | *(empty)* | public `ws(s)://` URL; must match what clients connect to, used by NIP-42 and NIP-62 |
 | `BKIND_DB` | `-db` | *(empty)* | database directory; empty means in-memory and nothing is persisted |
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | how often expired events are deleted |
-| `BKIND_KINDS` | `-kinds` | `4,5,62` | comma-separated kinds the relay serves |
-| `BKIND_MAX_EXPIRATION` | `-max-expiration` | `75h` | longest allowed NIP-40 expiration |
-| `BKIND_REQUIRE_EXPIRATION` | `-require-expiration` | `true` | make the NIP-40 tag mandatory |
-| `BKIND_REQUIRED_TAGS` | `-required-tags` | `client` | comma-separated mandatory tags |
-| `BKIND_MAX_CONTENT` | `-max-content` | `4096` | maximum content length in bytes |
-| `BKIND_MAX_TAGS` | `-max-tags` | `16` | maximum number of tags |
-| `BKIND_MAX_TAG_NAME` | `-max-tag-name` | `64` | maximum tag name length in bytes |
-| `BKIND_MAX_TAG_VALUE` | `-max-tag-value` | `256` | maximum tag value length in bytes |
-| `BKIND_REQUIRE_AUTH` | `-require-auth` | `true` | NIP-42 on reads and writes |
-| `BKIND_REJECT_COUNT` | `-reject-count` | `true` | refuse NIP-45 `COUNT` |
-| `BKIND_NEGENTROPY` | `-negentropy` | `false` | NIP-77 set reconciliation |
+| `BKIND_KINDS` | `-kinds` | `4,5,62` | comma-separated kinds the relay serves; drops the rules of kinds it leaves out |
 | `BKIND_NAME` | `-name` | `B Kind` | relay name in NIP-11 |
 | `BKIND_DESCRIPTION` | `-description` | *(derived)* | description in NIP-11; empty derives it from the kind list |
-| `BKIND_MAX_MESSAGE_LENGTH` | — | `12288` | advertised websocket frame limit |
-| `BKIND_MAX_SUBSCRIPTIONS` | — | `10` | advertised limit |
-| `BKIND_MAX_FILTERS` | — | `4` | advertised limit |
-| `BKIND_MAX_LIMIT` | — | `500` | advertised limit |
 
-Rate limits, the visibility classes (`recipient_visible`, `author_only`) and the kind
-shape validators are structured, so they live in the JSON file (or `BKIND_CONFIG_JSON`);
-every field is documented in [Configuring a relay](./docs/cookbook/configuration.md).
+Per-kind limits, tag rules, gates, write rate limits, read and connection
+limits, error templates — all of it is structured, so it lives in the JSON file
+(or `BKIND_CONFIG_JSON`); every field is documented in
+[Configuring a relay](./docs/cookbook/configuration.md), and
+`bkind -print-config` prints the whole resolved document.
 
 The NIP-11 document it serves:
 
@@ -186,8 +176,9 @@ The NIP-11 document it serves:
 ```
 
 The document is derived from the config: `supported_nips` gains `45` only when
-`count.reject` is `false`, and the description is generated from `kinds.allowed`, so
-neither can claim a feature this relay does not have.
+`count.reject` is `false`, and the description is generated from the
+whitelist, so neither can claim a feature this relay does not have.
+`max_event_tags` and `max_content_length` are the maxima across the kind rules.
 
 ## Documentation
 

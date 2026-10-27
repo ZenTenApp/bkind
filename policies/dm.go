@@ -3,7 +3,6 @@ package policies
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/ZenTenApp/bkind"
@@ -19,12 +18,12 @@ import (
 // Use Config.Kinds (or BKIND_KINDS) to change what is served.
 var DMKindAllowlist = []uint16{4, 5, 62}
 
-// dmKindRules is DMKindAllowlist with the visibility classes that go with it. The
-// DM* policies below are thin wrappers around these methods kept for callers that
-// wired khatru by hand; a relay built from a policies.Config uses the Config directly
+// dmKindRules is the gate set that goes with DMKindAllowlist. The DM* policies
+// below are thin wrappers around these methods kept for callers that wired
+// khatru by hand; a relay built from a policies.Config uses the Config directly
 // (see Config.Wire), so the write gate, the read gate, COUNT, live delivery and
 // NIP-11 all read the same value.
-var dmKindRules = DefaultConfig().Kinds
+var dmKindRules = DefaultConfig().KindRules()
 
 // DMReadPolicy is the read policy for a direct-message relay.
 //
@@ -85,44 +84,10 @@ func RequireAuthedAuthor(ctx context.Context, evt *nostr.Event) (bool, string) {
 }
 
 // RequireExpiration rejects events without a single valid "expiration" tag (NIP-40)
-// that is in the future and no further away than max.
+// that is in the future and no further away than max. It is the kind-rule check
+// of the default configuration, exported for callers that wire by hand.
 func RequireExpiration(max time.Duration) func(context.Context, *nostr.Event) (bool, string) {
-	maxSeconds := nostr.Timestamp(max.Seconds())
-
-	return func(ctx context.Context, evt *nostr.Event) (bool, string) {
-		var raw string
-		var count int
-		for _, tag := range evt.Tags {
-			if len(tag) > 0 && tag[0] == "expiration" {
-				count++
-				if len(tag) > 1 {
-					raw = tag[1]
-				}
-			}
-		}
-
-		switch {
-		case count == 0:
-			return true, `invalid: missing mandatory "expiration" tag`
-		case count > 1:
-			return true, `invalid: multiple "expiration" tags`
-		}
-
-		expiresAt, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return true, `invalid: "expiration" tag is not a unix timestamp`
-		}
-
-		now := nostr.Now()
-		if nostr.Timestamp(expiresAt) <= now {
-			return true, "invalid: event is already expired"
-		}
-		if nostr.Timestamp(expiresAt) > now+maxSeconds {
-			return true, fmt.Sprintf("invalid: expiration is too far in the future (max %s)", max)
-		}
-
-		return false, ""
-	}
+	return expirationEventCheck(true, max)
 }
 
 // RequireTag rejects events that do not carry exactly one non-empty named tag.

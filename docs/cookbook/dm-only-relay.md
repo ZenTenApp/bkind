@@ -19,7 +19,7 @@ Status: implemented on branch `complex/bkind`.
 
 | Requirement | Rule |
 |---|---|
-| Kinds | `{4, 5, 62}` only, no ephemeral (`kinds.allowed` in the config) |
+| Kinds | `{4, 5, 62}` only, no ephemeral (`kinds.whitelist` in the config) |
 | Payload size | `len(content) <= 4096` bytes |
 | Frame backstop | `MaxMessageSize ~= 12KB` (websocket read limit, not a check) |
 | Expiration | mandatory, exactly one tag, `now < expiration <= now + 75h` |
@@ -41,7 +41,7 @@ is **not** used (its 2-per-3-minutes event limit contradicts our numbers).
 
 1. **Content is capped at 4096 bytes**, not the serialized event. Tags and JSON
    overhead live inside the websocket frame limit only.
-2. **Kinds `{4, 5, 62}`.** The set is `kinds.allowed` in
+2. **Kinds `{4, 5, 62}`.** The set is `kinds.whitelist` in
    `policies.DefaultConfig`, not a literal in the wiring, and the write gate, the filter
    rewrite, reads, `COUNT`, live delivery and NIP-11 all derive from it — see
    [Configuring a relay](./configuration.md). Kind 5 lets a sender delete their own DM. Kind 62 is
@@ -217,8 +217,9 @@ is unexported, so a per-npub REQ limit could not be built outside the package.
 
 ## Wiring
 
-`examples/bkind/main.go` no longer lists policies. It loads a `policies.Config` (defaults,
-then `BKIND_CONFIG`, then `BKIND_*`, then flags) and calls one function:
+`examples/bkind/main.go` no longer lists policies. It loads a `policies.Config`
+(defaults, then `BKIND_CONFIG`, then `BKIND_KINDS`, then flags) and calls one
+function:
 
 ```go
 if err := cfg.Wire(relay); err != nil { ... }
@@ -229,21 +230,19 @@ if err := cfg.Wire(relay); err != nil { ... }
 `RejectEvent`:
 
 ```go
-c.Kinds.RestrictKind(),
-c.Auth.Required ? policies.RequireAuthedAuthor : nothing,
-c.Expiration.Required ? policies.RequireExpiration(c.Expiration.MaxDuration()) : nothing,
-policies.RequireTag(name) for each c.Tags.Required,
-policies.MaxContentLen(c.Content.Max),
-policies.TagShapeLimits(c.Tags.Max, c.Tags.MaxNameLen, c.Tags.MaxValueLen),
-policies.ShapeValidator(kind) for each c.Validation.ShapeKinds,
-the per-npub and per-ip event limiters from c.RateLimits,
+k.RestrictKind(),            // the whitelist
+c.writePolicy(),             // the checks of the event's own kind, in this order:
+//   write.allow, require_auth, max_age_of_event, max_age_event_in_future,
+//   max_expiration + required_tags, tag_patterns, max_size, tag_limits,
+//   p_tag, the shape validator, the kind's write rate limits
 ```
 
-`OverwriteFilter` is `c.Kinds.OverwriteFilters()`; `RejectFilter` is `MustAuth` (when
-required), `c.Kinds.ReadFilter`, `NoEmptyFilters`, `NoSearchQueries` plus the filter
-limiters; `RejectCountFilter` is `MustAuth`, `c.Kinds.RejectCount`; `PreventBroadcast` is
-`c.Kinds.PreventBroadcast`; `RejectConnection` is the connection limiters. The NIP-11
-document is derived from the same config, including `supported_nips`.
+`OverwriteFilter` is `k.OverwriteFilters()`; `RejectFilter` is `k.ReadFilter` (which
+carries the per-kind auth and visibility requirements), `NoEmptyFilters`,
+`NoSearchQueries` plus the read limiters; `RejectCountFilter` is `k.ReadFilter`;
+`PreventBroadcast` is `k.PreventBroadcast`; `RejectConnection` is the connection
+limiters. The NIP-11 document is derived from the same config, including
+`supported_nips`.
 
 The store, `ServiceURL`, `MaxMessageSize`, the expiration sweep interval and the HTTP
 server stay explicit in `main.go` — they are structure, not policy.
@@ -269,10 +268,10 @@ Run everything with:
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-The example reads its settings from `BKIND_*` environment variables and flags
-(`-url`, `-addr`, `-db`, `-sweep-interval`, `-kinds`, `-max-expiration`,
-`-max-content`, `-max-tags`, …), and from a JSON policy file named by `BKIND_CONFIG`.
-[Configuring a relay](./configuration.md) has the full table.
+The example reads its process settings from `BKIND_*` environment variables and flags
+(`-url`, `-addr`, `-db`, `-sweep-interval`, `-kinds`, `-name`, `-description`), and its
+policy set from a JSON document named by `BKIND_CONFIG` (or `BKIND_CONFIG_JSON`).
+[Configuring a relay](./configuration.md) is the reference for the document.
 
 ## Accepted consequences
 
