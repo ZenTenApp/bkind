@@ -6,7 +6,7 @@
   },
   "rules": {
     "7": {
-      "max_size": 64
+      "max_event_content_size": 64
     }
   }
 }

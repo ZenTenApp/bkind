@@ -1,3 +1,7 @@
 {
-  "max_size": "4KK"
+  "rules": {
+    "4": {
+      "max_event_size": "4KK"
+    }
+  }
 }

@@ -1,3 +1,7 @@
 {
-  "max_expiration": "P3W"
+  "rules": {
+    "4": {
+      "max_expiration": "P3W"
+    }
+  }
 }

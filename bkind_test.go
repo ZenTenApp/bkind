@@ -99,7 +99,6 @@ func newRelayWithConfig(t *testing.T, serviceURL string, mutate func(*policies.C
 
 	cfg := policies.DefaultConfig()
 	// the tests speak far faster than the production limits allow
-	cfg.RateLimits = nil
 	for _, rule := range cfg.Rules {
 		rule.RateLimits = nil
 	}
@@ -974,7 +973,7 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 				"write": {"allow": "*"},
 				"read": {"allow": "*", "privileged": true},
 				"require_auth": true,
-				"max_size": 64,
+				"max_event_content_size": 64,
 				"tag_limits": {"max_tags": 8, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
 				"required_tags": ["expiration", "client"],
 				"p_tag": "hex",

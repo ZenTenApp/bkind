@@ -80,15 +80,15 @@ func TestDefaultConfigIsValid(t *testing.T) {
 		t.Fatalf("default whitelist is %v, want [4 5 62]", got)
 	}
 	for _, kind := range []uint16{4, 5, 62} {
-		rule := cfg.EffectiveRule(kind)
+		rule := cfg.Rule(kind)
 		if rule == nil {
 			t.Fatalf("the default config has no rule for kind %d", kind)
 		}
 		if !rule.RequireAuth || !rule.Read.Privileged {
 			t.Fatalf("kind %d must be authenticated and privileged: %+v", kind, rule)
 		}
-		if rule.MaxSize.Bytes != 4096 {
-			t.Fatalf("kind %d max_size is %d, want 4096", kind, rule.MaxSize.Bytes)
+		if rule.MaxEventContentSize.Bytes != 4096 {
+			t.Fatalf("kind %d max_event_content_size is %d, want 4096", kind, rule.MaxEventContentSize.Bytes)
 		}
 		if rule.MaxExpiration.Duration != 75*time.Hour {
 			t.Fatalf("kind %d max_expiration is %v, want 75h", kind, rule.MaxExpiration.Duration)
@@ -97,7 +97,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 			t.Fatalf("kind %d required_tags are %v", kind, rule.RequiredTags)
 		}
 	}
-	if cfg.EffectiveRule(4).PTag != "hex" {
+	if cfg.Rule(4).PTag != "hex" {
 		t.Fatal("kind 4 is the one kind with a p rule in the defaults")
 	}
 	if !cfg.Count.Reject || cfg.Negentropy {
@@ -105,11 +105,14 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	}
 }
 
-func TestConfigFromJSONMerges(t *testing.T) {
+// A document replaces the sections and the rules it names, and nothing else. A
+// rule is never merged field by field into anything: it is one kind's whole
+// policy, so what the document left out is zero.
+func TestConfigDocumentReplacesWhatItNames(t *testing.T) {
 	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
 		"kinds": {"whitelist": [4, 1059]},
 		"rules": {
-			"4": {"max_size": 512},
+			"4": {"max_event_content_size": 512},
 			"1059": {"description": "gift wraps", "p_tag": "hex"}
 		}
 	}`))
@@ -121,23 +124,19 @@ func TestConfigFromJSONMerges(t *testing.T) {
 		t.Fatalf("whitelist is %v, want [4 1059]", got)
 	}
 
-	// an existing rule is patched, not replaced: the fields the document does
-	// not name keep their value
-	rule4 := cfg.EffectiveRule(4)
-	if rule4.MaxSize.Bytes != 512 {
-		t.Fatalf("kind 4 max_size is %d, want 512", rule4.MaxSize.Bytes)
+	// the rule is the document's rule, not a patch of the old one
+	rule4 := cfg.Rule(4)
+	if rule4.MaxEventContentSize.Bytes != 512 {
+		t.Fatalf("kind 4 max_event_content_size is %d, want 512", rule4.MaxEventContentSize.Bytes)
 	}
-	if rule4.RequireAuth != true || rule4.MaxExpiration.Duration != 75*time.Hour || rule4.PTag != "hex" {
-		t.Fatalf("the patch wiped fields it did not name: %+v", rule4)
+	if rule4.RequireAuth || rule4.MaxExpiration.Duration != 0 || rule4.PTag != "" || len(rule4.Write.Allow) != 0 {
+		t.Fatalf("the named rule kept settings it did not say: %+v", rule4)
 	}
 
-	// a rule for a new kind starts from zero: only what the document says
-	rule1059 := cfg.Rules["1059"]
-	if rule1059.PTag != "hex" || rule1059.Description != "gift wraps" {
+	// a new kind is the same thing: only what the document says
+	rule1059 := cfg.Rule(1059)
+	if rule1059.PTag != "hex" || rule1059.Description != "gift wraps" || rule1059.RequireAuth {
 		t.Fatalf("kind 1059 rule is %+v", rule1059)
-	}
-	if rule1059.RequireAuth || rule1059.MaxSize.Bytes != 0 {
-		t.Fatalf("a new rule must not inherit the other kinds' limits: %+v", rule1059)
 	}
 
 	// the rules of the kinds the new whitelist dropped are pruned
@@ -147,9 +146,9 @@ func TestConfigFromJSONMerges(t *testing.T) {
 		}
 	}
 
-	// sections absent from the document keep their default
+	// sections absent from the document keep their previous value
 	if cfg.ReadLimits == nil || cfg.NIP11.MaxLimit != 500 {
-		t.Fatalf("untouched defaults were lost: %+v", cfg)
+		t.Fatalf("untouched sections were lost: %+v", cfg)
 	}
 }
 
@@ -165,116 +164,111 @@ func TestConfigRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// The dialect has two spellings: the summary one ("size_limit",
-// "must_have_tags", "identifier_regex", "privileged", "kind", a "rules"
-// wrapper) and the full one ("max_size", "required_tags", "tag_patterns",
-// "read.privileged", "kinds", kind keys at the top level). Both are the same
-// config.
-func TestKindRuleAliasesAndTopLevelKeys(t *testing.T) {
-	terse := `{
-		"kind": {"whitelist": [4, 1059]},
+// A document can take a rule away without taking the kind away: null means "this
+// kind has no rule", and the kind is then served with the empty rule.
+func TestNullRuleDeletes(t *testing.T) {
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"4": null}}`))
+	if err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if _, ok := cfg.Rules["4"]; ok {
+		t.Fatalf("kind 4 still has a rule: %+v", cfg.Rules["4"])
+	}
+	if rule := cfg.Rule(4); !rule.Read.Allow.Nobody() || rule.RequireAuth {
+		t.Fatalf("a deleted rule must read as the empty rule: %+v", rule)
+	}
+
+	// the kind is still served, and served to nobody
+	relay, rules := wire(t, cfg)
+	write := writePolicy(relay)
+	evt := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "x"}
+	if reject, _ := write(aliceCtx(), evt); !reject {
+		t.Fatal("a kind with no rule must let nobody publish")
+	}
+	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{4}, Authors: []string{aliceKey}}); msg == "" {
+		t.Fatal("a kind with no rule must let nobody read")
+	}
+}
+
+// WithJSON returns a new Config: the one it was called on is not edited, even
+// though applying a document prunes rules and replaces them.
+func TestWithJSONLeavesTheReceiverAlone(t *testing.T) {
+	base := policies.DefaultConfig()
+	before := len(base.Rules)
+
+	if _, err := base.WithJSON([]byte(`{"kinds": {"whitelist": [4]}, "rules": {"4": {"description": "only one"}}}`)); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if len(base.Rules) != before || base.Rule(4).Description == "only one" {
+		t.Fatalf("WithJSON edited the receiver: %+v", base.Rules)
+	}
+}
+
+// There is one spelling. The old summary dialect — "kind" for the section,
+// kind numbers at the top level, and the short field names — is gone, and every
+// one of those names is now an unknown field rather than a synonym.
+func TestSummarySpellingsAreRejected(t *testing.T) {
+	cases := map[string]string{
+		`{"kind": {"whitelist": [4]}}`:                                      `unknown field "kind"`,
+		`{"kinds": {"whitelist": [4]}, "4": {"max_event_content_size": 1}}`: `unknown field "4"`,
+		`{"rules": {"4": {"size_limit": 4096}}}`:                            `unknown field "size_limit"`,
+		`{"rules": {"4": {"must_have_tags": ["p"]}}}`:                       `unknown field "must_have_tags"`,
+		`{"rules": {"4": {"max_expiry_duration": "P3D"}}}`:                  `unknown field "max_expiry_duration"`,
+		`{"rules": {"4": {"identifier_regex": "^k$"}}}`:                     `unknown field "identifier_regex"`,
+		`{"rules": {"4": {"privileged": true}}}`:                            `unknown field "privileged"`,
+	}
+	for document, want := range cases {
+		_, err := policies.DefaultConfig().WithJSON([]byte(document))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s was not refused as %q: %v", document, want, err)
+		}
+	}
+}
+
+// The canonical spelling of the same rule: "kinds", "rules", "read.privileged",
+// "max_event_content_size", "max_expiration" and "required_tags".
+func TestCanonicalRuleSpelling(t *testing.T) {
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
+		"kinds": {"whitelist": [4, 1059]},
 		"rules": {
 			"4": {
 				"description": "Nostr DM events",
-				"privileged": true,
-				"size_limit": 4096,
+				"read": {"allow": "*", "privileged": true},
+				"max_event_content_size": "4KB",
 				"max_age_of_event": 3600,
 				"max_age_event_in_future": 60,
-				"max_expiry_duration": "P3D",
-				"must_have_tags": ["p", "expiration", "client"]
+				"max_expiration": "72h",
+				"required_tags": ["p", "expiration", "client"]
 			}
 		}
-	}`
-	verbose := `{
-		"kinds": {"whitelist": [4, 1059]},
-		"4": {
-			"description": "Nostr DM events",
-			"read": {"allow": "*", "privileged": true},
-			"max_size": "4KB",
-			"max_age_of_event": 3600,
-			"max_age_event_in_future": 60,
-			"max_expiration": "72h",
-			"required_tags": ["p", "expiration", "client"]
-		}
-	}`
-
-	fromTerse, err := policies.DefaultConfig().WithJSON([]byte(terse))
+	}`))
 	if err != nil {
-		t.Fatalf("the terse document does not parse: %v", err)
-	}
-	fromVerbose, err := policies.DefaultConfig().WithJSON([]byte(verbose))
-	if err != nil {
-		t.Fatalf("the verbose document does not parse: %v", err)
-	}
-
-	if err := fromTerse.Validate(); err != nil {
-		t.Fatalf("the terse document does not validate: %v", err)
-	}
-	if err := fromVerbose.Validate(); err != nil {
-		t.Fatalf("the verbose document does not validate: %v", err)
-	}
-
-	// both documents mean the same rule, with the same numbers
-	for _, cfg := range []policies.Config{fromTerse, fromVerbose} {
-		rule := cfg.EffectiveRule(4)
-		if rule.MaxSize.Bytes != 4096 {
-			t.Fatalf("4KB / 4096 did not parse: %d", rule.MaxSize.Bytes)
-		}
-		if rule.MaxExpiration.Duration != 72*time.Hour {
-			t.Fatalf("P3D did not parse as 72h: %v", rule.MaxExpiration.Duration)
-		}
-		if rule.MaxAge.Duration != time.Hour || rule.MaxFutureAge.Duration != time.Minute {
-			t.Fatalf("the age window did not parse: %+v", rule)
-		}
-		if !rule.Read.Privileged {
-			t.Fatal("privileged / read.privileged did not parse")
-		}
-	}
-
-	// top-level kind keys are folded into rules
-	if _, ok := fromVerbose.Rules["4"]; !ok {
-		t.Fatal("the top-level kind key was not folded into rules")
-	}
-	if _, ok := fromVerbose.Rules["1059"]; ok {
-		t.Fatal("kind 1059 got a rule it was never given")
-	}
-
-	// an alias and its canonical name in the same rule is a conflict, not a
-	// silent winner
-	_, err = policies.DefaultConfig().WithJSON([]byte(`{"rules": {"4": {"size_limit": 1, "max_size": 2}}}`))
-	if err == nil || !strings.Contains(err.Error(), "size_limit") {
-		t.Fatalf("an alias conflict must be an error, got %v", err)
-	}
-
-	// and so is a kind defined twice
-	_, err = policies.DefaultConfig().WithJSON([]byte(`{"4": {"max_size": 1}, "rules": {"4": {"max_size": 2}}}`))
-	if err == nil || !strings.Contains(err.Error(), "twice") {
-		t.Fatalf("a kind defined twice must be an error, got %v", err)
-	}
-
-	// the backup-style spelling: identifier_regex is tag_patterns.d, and a kind
-	// can carry a rule without being a DM at all
-	backup := `{"kinds": {"whitelist": [5, 37801]}, "rules": {"37801": {
-		"description": "Master account backup",
-		"privileged": true,
-		"size_limit": 4096,
-		"identifier_regex": "^vaultkey$"
-	}}}`
-	cfg, err := policies.DefaultConfig().WithJSON([]byte(backup))
-	if err != nil {
-		t.Fatalf("the backup-style document does not parse: %v", err)
+		t.Fatalf("the canonical document does not parse: %v", err)
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("the backup-style document does not validate: %v", err)
+		t.Fatalf("the canonical document does not validate: %v", err)
 	}
-	rule := cfg.Rules["37801"]
-	if rule.TagPatterns["d"] != "^vaultkey$" || !rule.Read.Privileged || rule.MaxSize.Bytes != 4096 {
-		t.Fatalf("identifier_regex / privileged / size_limit did not land: %+v", rule)
+
+	rule := cfg.Rule(4)
+	if rule.MaxEventContentSize.Bytes != 4096 {
+		t.Fatalf("4KB did not parse: %d", rule.MaxEventContentSize.Bytes)
 	}
-	// kind 5 stays in the whitelist; it has no rule of its own in this document,
-	// so it resolves to exactly the defaults
-	if !cfg.EffectiveRule(5).RequireAuth || cfg.EffectiveRule(5).MaxSize.Bytes != 4096 {
-		t.Fatalf("kind 5 should resolve to the defaults: %+v", cfg.EffectiveRule(5))
+	if rule.MaxExpiration.Duration != 72*time.Hour {
+		t.Fatalf("72h did not parse: %v", rule.MaxExpiration.Duration)
+	}
+	if rule.MaxAge.Duration != time.Hour || rule.MaxFutureAge.Duration != time.Minute {
+		t.Fatalf("the age window did not parse: %+v", rule)
+	}
+	if !rule.Read.Privileged {
+		t.Fatal("read.privileged did not parse")
+	}
+	if !reflect.DeepEqual(rule.RequiredTags, []string{"p", "expiration", "client"}) {
+		t.Fatalf("required_tags did not land: %v", rule.RequiredTags)
+	}
+
+	// a kind whitelisted with no rule of its own keeps the defaults
+	if _, ok := cfg.Rules["1059"]; ok {
+		t.Fatal("kind 1059 got a rule it was never given")
 	}
 }
 
@@ -359,7 +353,7 @@ func TestConfigEnvOverrides(t *testing.T) {
 func TestConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay.json")
-	if err := os.WriteFile(path, []byte(`{"rules": {"4": {"max_size": 100}}, "nip11": {"name": "from file"}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"rules": {"4": {"max_event_content_size": 100}}, "nip11": {"name": "from file"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -367,7 +361,7 @@ func TestConfigFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
-	if cfg.EffectiveRule(4).MaxSize.Bytes != 100 || cfg.NIP11.Name != "from file" {
+	if cfg.Rule(4).MaxEventContentSize.Bytes != 100 || cfg.NIP11.Name != "from file" {
 		t.Fatalf("file values not applied: %+v", cfg)
 	}
 
@@ -378,72 +372,6 @@ func TestConfigFromFile(t *testing.T) {
 	}
 	if len(cfg.Kinds.Whitelist) != 1 || cfg.Kinds.Whitelist[0] != 4 {
 		t.Fatalf("BKIND_KINDS did not override the file: %v", cfg.Kinds.Whitelist)
-	}
-}
-
-func TestConfigStrictModeFromEnvironment(t *testing.T) {
-	dir := t.TempDir()
-
-	full, err := policies.DefaultConfig().JSON()
-	if err != nil {
-		t.Fatalf("failed to render: %v", err)
-	}
-	complete := filepath.Join(dir, "complete.json")
-	if err := os.WriteFile(complete, full, 0o600); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-	partial := filepath.Join(dir, "partial.json")
-	if err := os.WriteFile(partial, []byte(`{"rules": {"4": {"max_size": 512}}}`), 0o600); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	// lenient is the default: a partial file is a patch
-	cfg, err := policies.LoadConfig(envFunc(map[string]string{"BKIND_CONFIG": partial}))
-	if err != nil {
-		t.Fatalf("a partial file must be accepted by default: %v", err)
-	}
-	if cfg.EffectiveRule(4).MaxSize.Bytes != 512 || !cfg.EffectiveRule(4).RequireAuth {
-		t.Fatalf("the patch did not apply on top of the defaults: %+v", cfg.EffectiveRule(4))
-	}
-
-	// strict refuses it, and does so before anything can be wired
-	if _, err := policies.LoadConfig(envFunc(map[string]string{
-		"BKIND_CONFIG":        partial,
-		"BKIND_CONFIG_STRICT": "true",
-	})); err == nil {
-		t.Fatal("strict mode accepted a partial file")
-	} else if !strings.Contains(err.Error(), `"kinds"`) {
-		t.Fatalf("the error does not name the first missing section: %v", err)
-	}
-
-	// the complete file is accepted in strict mode and means exactly what the
-	// defaults mean
-	cfg, err = policies.LoadConfig(envFunc(map[string]string{
-		"BKIND_CONFIG":        complete,
-		"BKIND_CONFIG_STRICT": "true",
-	}))
-	if err != nil {
-		t.Fatalf("strict mode rejected a complete file: %v", err)
-	}
-	want := policies.DefaultConfig()
-	if err := want.Validate(); err != nil {
-		t.Fatalf("bad fixture: %v", err)
-	}
-	if !reflect.DeepEqual(cfg, want) {
-		t.Fatalf("the complete file does not mean the defaults:\n got %+v\nwant %+v", cfg, want)
-	}
-
-	// strict applies to the inline document too
-	if _, err := policies.LoadConfig(envFunc(map[string]string{
-		"BKIND_CONFIG_JSON":   `{"rules": {"4": {"max_size": 512}}}`,
-		"BKIND_CONFIG_STRICT": "true",
-	})); err == nil {
-		t.Fatal("strict mode accepted a partial inline document")
-	}
-
-	// and it is still a boolean
-	if _, err := policies.LoadConfig(envFunc(map[string]string{"BKIND_CONFIG_STRICT": "yes please"})); err == nil {
-		t.Fatal("a non-boolean BKIND_CONFIG_STRICT was accepted")
 	}
 }
 
@@ -580,61 +508,71 @@ func TestConfigValidationErrors(t *testing.T) {
 // top-level defaults — that is what makes the defaults worth having. A rule that
 // is built in Go and holds nothing is the opposite: fully explicit, so every
 // setting is zero, which means "no restrictions".
-func TestUnruledKindGetsTheDefaults(t *testing.T) {
+// A kind the document gave no rule is served with the empty rule: nobody may
+// publish it and nobody may read it. Once there is nothing to inherit from, that
+// is what "the document did not say" has to mean.
+func TestUnruledKindIsTheEmptyRule(t *testing.T) {
 	cfg := policies.DefaultConfig()
-	// SetKinds prunes the rules of the kinds the new whitelist drops; kind 1059
-	// stays in the whitelist without a rule
 	cfg.SetKinds([]uint16{4, 1059})
 
 	relay, rules := wire(t, cfg)
 	write := writePolicy(relay)
 
-	// the defaults' require_auth and required_tags apply to the new kind
 	evt := &nostr.Event{Kind: 1059, PubKey: aliceKey, Content: "x"}
-	if reject, msg := write(context.Background(), evt); !reject || !strings.HasPrefix(msg, "auth-required:") {
-		t.Fatalf("an unruled kind must inherit require_auth: %v %q", reject, msg)
+	if reject, msg := write(aliceCtx(), evt); !reject {
+		t.Fatalf("an unruled kind must let nobody publish it: %v %q", reject, msg)
 	}
-	if reject, msg := write(aliceCtx(), evt); !reject || !strings.Contains(msg, "expiration") {
-		t.Fatalf("an unruled kind must inherit required_tags: %v %q", reject, msg)
+	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{1059}, Authors: []string{aliceKey}}); msg == "" {
+		t.Fatal("an unruled kind must let nobody read it")
 	}
-
-	// the defaults' p rule makes it recipient-visible: author and "p" only
-	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{1059}, Authors: []string{bobKey}}); msg == "" {
-		t.Fatal("a third party must not read an unruled kind")
-	}
-	if reject, _ := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{1059}, Authors: []string{aliceKey}}); reject {
-		t.Fatal("the author must read their own unruled-kind events")
+	if !rules.PreventBroadcast(&bkind.WebSocket{AuthedPublicKey: aliceKey}, evt) {
+		t.Fatal("live delivery must agree: an unruled kind goes to nobody")
 	}
 
-	// a rule built in Go with nothing in it is fully explicit: wide open
-	cfg.Rules["1059"] = &policies.KindRule{}
+	// giving the kind a rule of its own is what opens it up
+	cfg.Rules["1059"] = &policies.KindRule{RuleSettings: policies.RuleSettings{
+		Write: policies.WriteGate{Allow: policies.AllowList{"*"}},
+		Read:  policies.ReadGate{Allow: policies.AllowList{"*"}},
+	}}
 	relay, rules = wire(t, cfg)
 	write = writePolicy(relay)
 	if reject, _ := write(context.Background(), evt); reject {
-		t.Fatal("an empty Go rule means no write restrictions")
+		t.Fatal("an open rule must let anyone publish")
 	}
 	if reject, _ := rules.ReadFilter(context.Background(), nostr.Filter{Kinds: []int{1059}}); reject {
-		t.Fatal("an empty Go rule means public reads")
+		t.Fatal("an open rule must let anyone read")
 	}
 	if rules.PreventBroadcast(&bkind.WebSocket{}, evt) {
-		t.Fatal("an empty Go rule means public delivery")
+		t.Fatal("an open rule must deliver to anyone")
 	}
 }
 
 // The top-level settings are the defaults every kind starts from, and a rule
 // names only what it changes — including an explicit zero, which means "off"
 // rather than "inherit".
-func TestDefaultsApplyToSparseRules(t *testing.T) {
+// A rule stands alone. Two kinds in one document can have unrelated policies, and
+// neither learns anything from the other — there is no top-level block to
+// inherit from and no presence bookkeeping to get wrong.
+func TestRulesDoNotInherit(t *testing.T) {
 	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
-		"max_size": "4KB",
-		"require_auth": true,
-		"required_tags": ["expiration", "client"],
-		"max_expiration": "75h",
-		"kinds": {"whitelist": [4, 1059, 37801]},
+		"kinds": {"whitelist": [4, 37801]},
 		"rules": {
-			"4":     {"description": "inherits everything"},
-			"1059":  {"max_size": "64KB"},
-			"37801": {"required_tags": [], "max_expiration": 0, "require_auth": false}
+			"4": {
+				"description": "the DM rule, spelled out",
+				"write": {"allow": "*"},
+				"read": {"allow": "*", "privileged": true},
+				"require_auth": true,
+				"max_event_content_size": "4KB",
+				"max_expiration": "75h",
+				"p_tag": "hex",
+				"required_tags": ["expiration", "client"]
+			},
+			"37801": {
+				"description": "a backup kind with its own policy",
+				"write": {"allow": "*"},
+				"read": {"allow": "*", "privileged": true},
+				"required_tags": ["d"]
+			}
 		}
 	}`))
 	if err != nil {
@@ -644,43 +582,30 @@ func TestDefaultsApplyToSparseRules(t *testing.T) {
 		t.Fatalf("failed to validate: %v", err)
 	}
 
-	// unnamed settings come from the defaults
-	inherited := cfg.EffectiveRule(4)
-	if inherited.MaxSize.Bytes != 4096 || inherited.MaxExpiration.Duration != 75*time.Hour || !inherited.RequireAuth {
-		t.Fatalf("kind 4 did not inherit the defaults: %+v", inherited)
+	dm := cfg.Rule(4)
+	if dm.MaxEventContentSize.Bytes != 4096 || dm.MaxExpiration.Duration != 75*time.Hour || !dm.RequireAuth || dm.PTag != "hex" {
+		t.Fatalf("kind 4 does not hold what its rule says: %+v", dm)
 	}
 
-	// a named setting wins, and the rest still inherits
-	bigger := cfg.EffectiveRule(1059)
-	if bigger.MaxSize.Bytes != 64*1024 {
-		t.Fatalf("kind 1059 max_size is %d, want 64KB", bigger.MaxSize.Bytes)
+	backup := cfg.Rule(37801)
+	if backup.MaxEventContentSize.Bytes != 0 || backup.MaxExpiration.Duration != 0 || backup.RequireAuth || backup.PTag != "" {
+		t.Fatalf("kind 37801 picked up settings it never named: %+v", backup)
 	}
-	if len(bigger.RequiredTags) != 2 || !bigger.RequireAuth {
-		t.Fatalf("kind 1059 lost the settings it did not name: %+v", bigger)
-	}
-
-	// an explicit zero is a choice: it turns the default off, it does not fall
-	// back to it
-	open := cfg.EffectiveRule(37801)
-	if len(open.RequiredTags) != 0 || open.MaxExpiration.Duration != 0 || open.RequireAuth {
-		t.Fatalf("kind 37801 did not override the defaults: %+v", open)
-	}
-	// and it still inherits what it did not mention
-	if open.MaxSize.Bytes != 4096 {
-		t.Fatalf("kind 37801 should still inherit max_size: %d", open.MaxSize.Bytes)
+	if !reflect.DeepEqual(backup.RequiredTags, []string{"d"}) {
+		t.Fatalf("kind 37801 required_tags are %v", backup.RequiredTags)
 	}
 
-	// the relay honours the effective rules, not the document text
+	// and the relay does what the two rules say: the backup needs no expiration
+	// and no p tag, the DM needs both
 	relay, _ := wire(t, cfg)
 	write := writePolicy(relay)
-	noExpiration := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "x",
-		Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
-	if reject, msg := write(context.Background(), noExpiration); reject {
-		t.Fatalf("kind 37801 turned expiration off but was refused: %q", msg)
+	plain := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup", Tags: nostr.Tags{{"d", "vaultkey"}}}
+	if reject, msg := write(aliceCtx(), plain); reject {
+		t.Fatalf("kind 37801 does not demand an expiration or a p tag: %q", msg)
 	}
-	dm := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext", Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
-	if reject, msg := write(aliceCtx(), dm); !reject || !strings.Contains(msg, "expiration") {
-		t.Fatalf("kind 4 inherited the expiration rule but was not held to it: %v %q", reject, msg)
+	noExpiration := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext", Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), noExpiration); !reject || !strings.Contains(msg, "expiration") {
+		t.Fatalf("kind 4 holds its own expiration rule: %v %q", reject, msg)
 	}
 }
 
@@ -698,19 +623,15 @@ func TestShapeIsNotInherited(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("whitelisting a kind without a validator must be legal: %v", err)
 	}
-	if !cfg.EffectiveRule(4).Shape {
+	if !cfg.Rule(4).Shape {
 		t.Fatal("kind 4 asked for its validator and did not get it")
 	}
-	if cfg.EffectiveRule(1059).Shape {
+	if cfg.Rule(1059).Shape {
 		t.Fatal("kind 1059 inherited a shape flag it cannot honour")
 	}
 
 	// asking for a validator that does not exist is still an error
-	bad, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"1059": {"shape": true}}, "kinds": {"whitelist": [1059]}}`))
-	if err != nil {
-		t.Fatalf("failed to parse: %v", err)
-	}
-	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "shape") {
+	if _, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"1059": {"shape": true}}, "kinds": {"whitelist": [1059]}}`)); err == nil || !strings.Contains(err.Error(), "shape") {
 		t.Fatalf("a rule asking for a missing validator must be refused, got %v", err)
 	}
 }
@@ -1052,256 +973,35 @@ func TestPrintedConfigIsTheExampleFile(t *testing.T) {
 	}
 }
 
-func TestPrintedConfigRoundTripsThroughStrictMode(t *testing.T) {
-	public := policies.DefaultConfig()
-	public.SetKinds([]uint16{1})
-	// a full rule built in Go: no presence tracking, so every field is the value
-	public.Rules = map[string]*policies.KindRule{
-		"1": {
-			Description: "public notes",
-			RuleSettings: policies.RuleSettings{
-				Write:         policies.WriteGate{Allow: policies.AllowList{"*"}},
-				Read:          policies.ReadGate{Allow: policies.AllowList{"*"}},
-				MaxSize:       policies.Size{Bytes: 8192},
-				MaxExpiration: policies.Duration{24 * time.Hour},
-				TagLimits:     policies.TagLimits{MaxTags: 8, MaxNameChars: 32, MaxValueChars: 128},
-				RateLimits: []policies.RateLimit{
-					{Scope: "npub", Limit: 10, Window: policies.Duration{time.Minute}},
-				},
-				TagPatterns: map[string]string{"d": "^note-[0-9]+$"},
-				Errors:      map[string]string{"max_size": "blocked: too big ({size} > {limit})"},
-			},
-		},
-	}
-	public.NIP11.ExtraNIPs = []int{50}
-	public.Negentropy = true
-
-	// the two ends of strict mode have to be inverses: what the relay prints, the
-	// relay accepts, and it means the same thing. A field added to Config but not
-	// to the printed document would fail here.
-	for _, cfg := range []policies.Config{policies.DefaultConfig(), public} {
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("bad fixture: %v", err)
-		}
-
-		document, err := cfg.JSON()
-		if err != nil {
-			t.Fatalf("failed to render: %v", err)
-		}
-
-		var restored policies.Config
-		if restored, err = restored.WithStrictJSON(document); err != nil {
-			t.Fatalf("the printed document is not accepted in strict mode: %v\n%s", err, document)
-		}
-		if err := restored.Validate(); err != nil {
-			t.Fatalf("the printed document does not validate: %v", err)
-		}
-		// the contract is the document: a rule built in Go and the same rule
-		// decoded from the file have different presence bookkeeping but must
-		// print (and therefore behave) identically
-		again, err := restored.JSON()
-		if err != nil {
-			t.Fatalf("failed to render the restored config: %v", err)
-		}
-		if string(again) != string(document) {
-			t.Fatalf("round trip changed the document:\n got %s\nwant %s", again, document)
-		}
-		for kind, rule := range cfg.EffectiveRules() {
-			if want := restored.EffectiveRule(kind); !reflect.DeepEqual(rule, want) {
-				t.Fatalf("round trip changed kind %d's effective rule:\n got %+v\nwant %+v", kind, want, rule)
-			}
-		}
-	}
-}
-
-func TestStrictJSONRequiresEveryField(t *testing.T) {
-	full, err := policies.DefaultConfig().JSON()
+// The printed document is the document: reading it back produces the same bytes,
+// and a relay with no configuration at all reads it back to the same values.
+func TestPrintedConfigRoundTrips(t *testing.T) {
+	printed, err := policies.DefaultConfig().JSON()
 	if err != nil {
 		t.Fatalf("failed to render: %v", err)
 	}
 
-	// removing any one field must be caught, and named in the error
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(full, &document); err != nil {
-		t.Fatalf("failed to parse the rendered config: %v", err)
-	}
-
-	cloneDoc := func() map[string]json.RawMessage {
-		clone := map[string]json.RawMessage{}
-		for k, v := range document {
-			clone[k] = v
-		}
-		return clone
-	}
-	mustPass := func(t *testing.T, doc map[string]json.RawMessage) {
-		t.Helper()
-		body, err := json.Marshal(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var cfg policies.Config
-		if _, err := cfg.WithStrictJSON(body); err != nil {
-			t.Fatalf("strict mode rejected a document it should accept: %v", err)
-		}
-	}
-	mustFail := func(t *testing.T, name string, doc map[string]json.RawMessage) {
-		t.Helper()
-		body, err := json.Marshal(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var cfg policies.Config
-		if _, err := cfg.WithStrictJSON(body); err == nil {
-			t.Fatalf("strict mode accepted a document without %s", name)
-		} else if !strings.Contains(err.Error(), name) {
-			t.Fatalf("the error does not name %s: %v", name, err)
-		}
-	}
-
-	// every top-level key, defaults included
-	for _, key := range []string{
-		"kinds", "rules", "filters", "read_limits", "connection_limits", "count", "nip11", "negentropy",
-		"write", "read", "require_auth", "max_size", "max_expiration", "max_age_of_event",
-		"max_age_event_in_future", "p_tag", "required_tags", "tag_patterns", "tag_limits",
-		"rate_limits", "errors",
-	} {
-		clone := cloneDoc()
-		delete(clone, key)
-		mustFail(t, key, clone)
-	}
-
-	// every field of every flat section
-	for _, section := range []string{"kinds", "filters", "count", "nip11"} {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(document[section], &fields); err != nil {
-			t.Fatal(err)
-		}
-		for name := range fields {
-			reduced := map[string]json.RawMessage{}
-			for k, v := range fields {
-				reduced[k] = v
-			}
-			delete(reduced, name)
-			body, err := json.Marshal(reduced)
-			if err != nil {
-				t.Fatal(err)
-			}
-			clone := cloneDoc()
-			clone[section] = body
-			t.Run(section+"."+name, func(t *testing.T) {
-				mustFail(t, section+"."+name, clone)
-			})
-		}
-	}
-
-	// a rule body is sparse by design, so no field of it is required; what is
-	// required is that nothing inside it is misspelled, and that the objects it
-	// does carry are complete
-	var rules map[string]json.RawMessage
-	if err := json.Unmarshal(document["rules"], &rules); err != nil {
-		t.Fatal(err)
-	}
-	// the gate/tag_limits/rate_limits checks need a rule body that carries
-	// them: the top-level defaults do
-	rule := map[string]json.RawMessage{}
-	for _, key := range []string{"write", "read", "tag_limits", "rate_limits"} {
-		rule[key] = document[key]
-	}
-	withRule := func(t *testing.T, name string, mutate func(map[string]json.RawMessage)) {
-		t.Helper()
-		body := map[string]json.RawMessage{}
-		for k, v := range rule {
-			body[k] = v
-		}
-		mutate(body)
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rulesClone := map[string]json.RawMessage{}
-		for k, v := range rules {
-			rulesClone[k] = v
-		}
-		rulesClone["4"] = encoded
-		encodedRules, err := json.Marshal(rulesClone)
-		if err != nil {
-			t.Fatal(err)
-		}
-		clone := cloneDoc()
-		clone["rules"] = encodedRules
-		mustFail(t, name, clone)
-	}
-
-	// a sparse rule is accepted: a rule that only says "max_size" is a rule
-	clone := cloneDoc()
-	clone["rules"] = []byte(`{"4": {"max_size": 512}}`)
-	mustPass(t, clone)
-
-	// a misspelled setting inside a rule is not
-	clone = cloneDoc()
-	clone["rules"] = []byte(`{"4": {"max_sise": 512}}`)
-	mustFail(t, "max_sise", clone)
-
-	// the gates
-	for gate, keys := range map[string][]string{"write": {"allow"}, "read": {"allow", "privileged"}} {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(rule[gate], &fields); err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range keys {
-			gateName, fieldName := gate, name
-			withRule(t, "rules.4."+gateName+"."+fieldName, func(body map[string]json.RawMessage) {
-				reduced := map[string]json.RawMessage{}
-				for k, v := range fields {
-					reduced[k] = v
-				}
-				delete(reduced, fieldName)
-				encoded, err := json.Marshal(reduced)
-				if err != nil {
-					t.Fatal(err)
-				}
-				body[gateName] = encoded
-			})
-		}
-	}
-
-	// tag_limits
-	withRule(t, "rules.4.tag_limits.max_tags", func(body map[string]json.RawMessage) {
-		delete(body, "tag_limits")
-		body["tag_limits"] = []byte(`{"max_tag_name_chars": 64, "max_tag_value_chars": 256}`)
-	})
-
-	// a rate limit entry
-	withRule(t, "rules.4.rate_limits[0].window", func(body map[string]json.RawMessage) {
-		body["rate_limits"] = []byte(`[{"scope": "npub", "limit": 30}]`)
-	})
-
-	// a sparse document is fine in lenient mode too: that is the difference
-	clone = cloneDoc()
-	var partialRules map[string]json.RawMessage
-	if err := json.Unmarshal(clone["rules"], &partialRules); err != nil {
-		t.Fatal(err)
-	}
-	partialRules["4"] = []byte(`{"max_size": 512}`)
-	encoded, err := json.Marshal(partialRules)
+	cfg, err := policies.DefaultConfig().WithJSON(printed)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the printed document does not parse: %v", err)
 	}
-	clone["rules"] = encoded
-	body, err := json.Marshal(clone)
+	again, err := cfg.JSON()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to render again: %v", err)
 	}
-	if _, err := (&policies.Config{}).WithJSON(body); err != nil {
-		t.Fatalf("lenient mode rejected a partial document: %v", err)
+	if string(again) != string(printed) {
+		t.Fatalf("the printed document is not stable:\n%s\n---\n%s", printed, again)
 	}
 
-	// an empty document is the extreme case, and the message should say where to
-	// get a complete one rather than "kinds.whitelist is empty"
-	if _, err := (&policies.Config{}).WithStrictJSON([]byte(`{}`)); err == nil {
-		t.Fatal("strict mode accepted an empty document")
-	} else if !strings.Contains(err.Error(), "print-config") {
-		t.Fatalf("the error does not point at -print-config: %v", err)
+	// a zero Config can read it too, which is what makes it a complete document
+	var zero policies.Config
+	loaded, err := zero.WithJSON(printed)
+	if err != nil {
+		t.Fatalf("a zero config does not accept the document: %v", err)
+	}
+	want := policies.DefaultConfig()
+	if !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("the document does not mean the embedded default:\n got %+v\nwant %+v", loaded, want)
 	}
 }
 
@@ -1336,8 +1036,8 @@ func TestExampleConfigFilesValidate(t *testing.T) {
 }
 
 // The NIP-17-style example: kinds 4 and 1059, both privileged, each with its own
-// age window, in the summary spelling. It is a patch on the defaults, so what it
-// does not name comes from the top level — this test pins which is which.
+// age window. It is a patch on the defaults, so what it does not name comes from
+// the top level — this test pins which is which.
 func TestNIP17ExampleResolves(t *testing.T) {
 	data, err := os.ReadFile("../examples/bkind/bkind.nip17.example.json")
 	if err != nil {
@@ -1355,7 +1055,7 @@ func TestNIP17ExampleResolves(t *testing.T) {
 		t.Fatalf("whitelist is %v, want [4 1059]", got)
 	}
 
-	dm, giftWrap := cfg.EffectiveRule(4), cfg.EffectiveRule(1059)
+	dm, giftWrap := cfg.Rule(4), cfg.Rule(1059)
 	for _, tc := range []struct {
 		kind int
 		rule *policies.KindRule
@@ -1370,7 +1070,7 @@ func TestNIP17ExampleResolves(t *testing.T) {
 		if tc.rule.MaxFutureAge.Duration != time.Minute {
 			t.Fatalf("kind %d max_age_event_in_future is %v", tc.kind, tc.rule.MaxFutureAge.Duration)
 		}
-		if tc.rule.MaxSize.Bytes != 4096 || tc.rule.MaxExpiration.Duration != 72*time.Hour {
+		if tc.rule.MaxEventContentSize.Bytes != 4096 || tc.rule.MaxExpiration.Duration != 72*time.Hour {
 			t.Fatalf("kind %d size/expiry is %+v", tc.kind, tc.rule)
 		}
 		if !tc.rule.Read.Privileged {
@@ -1435,11 +1135,11 @@ func TestDMVerboseExampleResolves(t *testing.T) {
 	}
 
 	for _, kind := range []uint16{4, 1059} {
-		rule := cfg.EffectiveRule(kind)
+		rule := cfg.Rule(kind)
 		if !rule.Read.Privileged || !rule.RequireAuth || rule.PTag != "hex" {
 			t.Fatalf("kind %d should be privileged, authenticated and recipient-visible: %+v", kind, rule)
 		}
-		if rule.MaxSize.Bytes != 4096 || rule.MaxExpiration.Duration != 75*time.Hour {
+		if rule.MaxEventContentSize.Bytes != 4096 || rule.MaxExpiration.Duration != 75*time.Hour {
 			t.Fatalf("kind %d size/expiry is %+v", kind, rule)
 		}
 		if rule.TagLimits.MaxTags != 32 || rule.TagLimits.MaxNameChars != 32 || rule.TagLimits.MaxValueChars != 128 {
@@ -1485,6 +1185,62 @@ func TestDMVerboseExampleResolves(t *testing.T) {
 	}
 }
 
+// max_event_size bounds the event as it goes on the wire, id, signature and
+// every tag included; max_event_content_size bounds the content alone. They are
+// separate settings: a small payload can still carry a huge tag, and a big
+// payload may sit inside a generous event.
+// max_event_size bounds the event as it goes on the wire, id, signature and
+// every tag included; max_event_content_size bounds the content alone. They are
+// separate settings: a small payload can still carry a huge tag, and a big
+// payload may sit inside a generous event.
+func TestEventSizeAndContentSizeAreSeparate(t *testing.T) {
+	fatTag := strings.Repeat("t", 400)
+
+	// a tight event budget, no content limit
+	tight := policies.DefaultConfig()
+	tight.Rules["4"].MaxEventSize = policies.Size{Bytes: 512}
+	tight.Rules["4"].MaxEventContentSize = policies.Size{}
+
+	relay, _ := wire(t, tight)
+	write := writePolicy(relay)
+
+	small := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), small); reject {
+		t.Fatalf("an event inside the size budget must pass: %q", msg)
+	}
+
+	fat := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}, {"blob", fatTag}}}
+	if reject, msg := write(aliceCtx(), fat); !reject || !strings.Contains(msg, "too large") || !strings.Contains(msg, "max 512") {
+		t.Fatalf("a fat tag must be refused for the event size, not the content: %v %q", reject, msg)
+	}
+	if size, limit := policies.EventLen(fat), 512; size <= limit {
+		t.Fatalf("the fixture is not over the budget: %d <= %d", size, limit)
+	}
+
+	// the content limit is the other axis, and leaving the event budget at zero
+	// means "no event budget", not "somebody else's number"
+	roomy := policies.DefaultConfig()
+	roomy.Rules["4"].MaxEventSize = policies.Size{}
+	roomy.Rules["4"].MaxEventContentSize = policies.Size{Bytes: 600}
+
+	relay, _ = wire(t, roomy)
+	write = writePolicy(relay)
+
+	inside := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 600),
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), inside); reject {
+		t.Fatalf("600 bytes of content is at the limit: %q", msg)
+	}
+
+	outside := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 601),
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), outside); !reject || !strings.Contains(msg, "content is too large") {
+		t.Fatalf("601 bytes of content must be refused by the content limit: %v %q", reject, msg)
+	}
+}
+
 // the templates the verbose example defines
 var errorTemplateKeysForTest = []string{
 	"auth_required", "max_size", "missing_tag", "p_tag", "expiration", "rate_limited", "tag_limits",
@@ -1513,11 +1269,11 @@ func TestAppDataExampleResolves(t *testing.T) {
 
 	// the two backup kinds are told apart by their "d" regex, and nothing else
 	for kind, pattern := range map[uint16]string{37801: "^vaultkey$", 37802: "^[0-9]{16}$"} {
-		rule := cfg.EffectiveRule(kind)
+		rule := cfg.Rule(kind)
 		if rule.TagPatterns["d"] != pattern {
 			t.Fatalf("kind %d tag_patterns[d] is %q, want %q", kind, rule.TagPatterns["d"], pattern)
 		}
-		if rule.MaxSize.Bytes != 4096 || !rule.Read.Privileged || !rule.RequireAuth {
+		if rule.MaxEventContentSize.Bytes != 4096 || !rule.Read.Privileged || !rule.RequireAuth {
 			t.Fatalf("kind %d does not match its rule: %+v", kind, rule)
 		}
 		// inherited from the reference defaults, and worth knowing about
@@ -1530,7 +1286,7 @@ func TestAppDataExampleResolves(t *testing.T) {
 	}
 
 	// kind 5 has no rule here, so it keeps the reference rule for deletions
-	deletion := cfg.EffectiveRule(5)
+	deletion := cfg.Rule(5)
 	if deletion.PTag != "" || !deletion.Shape {
 		t.Fatalf("kind 5 should keep the reference deletion rule: %+v", deletion)
 	}
@@ -1559,15 +1315,15 @@ func TestAppDataExampleResolves(t *testing.T) {
 // The same document with the inherited constraints turned off produces a backup
 // relay that behaves like one: no "p" tag demanded, no expiry demanded, and the
 // "d" tag itself required.
+// The same backup relay, written out: no "p" tag demanded, no expiry demanded,
+// and the "d" tag itself required. Every line of that is in the rules, because
+// there is nowhere else for it to be.
 func TestAppDataExampleWithoutDMInheritance(t *testing.T) {
 	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
-		"kind": {"whitelist": [5, 37801, 37802]},
-		"p_tag": "",
-		"max_expiration": 0,
-		"required_tags": ["d", "client"],
+		"kinds": {"whitelist": [5, 37801, 37802]},
 		"rules": {
-			"37801": {"description": "Master account backup event", "privileged": true, "size_limit": 4096, "identifier_regex": "^vaultkey$"},
-			"37802": {"description": "Associated account backup event", "privileged": true, "size_limit": 4096, "identifier_regex": "^[0-9]{16}$"}
+			"37801": {"description": "Master account backup event", "write": {"allow": "*"}, "read": {"allow": "*", "privileged": true}, "max_event_content_size": 4096, "required_tags": ["d", "client"], "tag_patterns": {"d": "^vaultkey$"}},
+			"37802": {"description": "Associated account backup event", "write": {"allow": "*"}, "read": {"allow": "*", "privileged": true}, "max_event_content_size": 4096, "required_tags": ["d", "client"], "tag_patterns": {"d": "^[0-9]{16}$"}}
 		}
 	}`))
 	if err != nil {
@@ -1626,7 +1382,7 @@ func TestAppDataVerboseExampleResolves(t *testing.T) {
 		37801: {"^vaultkey$", "vaultkey"},
 		37802: {"^[0-9]{16}$", "1234567890123456"},
 	} {
-		rule := cfg.EffectiveRule(kind)
+		rule := cfg.Rule(kind)
 		if rule.TagPatterns["d"] != tc.pattern {
 			t.Fatalf("kind %d d pattern is %q", kind, rule.TagPatterns["d"])
 		}
@@ -1676,29 +1432,27 @@ func TestAppDataVerboseExampleResolves(t *testing.T) {
 
 // A tag budget below the number of tags the rule itself demands is a relay that
 // refuses every event, so it is a startup error rather than a surprise.
+// A tag budget below the number of tags the rule itself demands is a relay that
+// refuses every event, so it is a startup error rather than a surprise.
 func TestTagBudgetMustFitRequiredTags(t *testing.T) {
 	cases := []struct {
 		name string
 		json string
 	}{
 		{
-			name: "inherited p and expiration against max_tags: 1",
-			json: `{"rules": {"4": {"tag_limits": {"max_tags": 1, "max_tag_name_chars": 1, "max_tag_value_chars": 8}}}}`,
+			name: "a p rule and two required tags against max_tags: 1",
+			json: `{"rules": {"4": {"p_tag": "hex", "required_tags": ["expiration", "client"],
+			        "tag_limits": {"max_tags": 1, "max_tag_name_chars": 1, "max_tag_value_chars": 8}}}}`,
 		},
 		{
 			name: "three required tags against max_tags: 2",
-			json: `{"p_tag": "", "required_tags": ["d", "client", "expiration"],
-			        "rules": {"4": {"tag_limits": {"max_tags": 2, "max_tag_name_chars": 2, "max_tag_value_chars": 8}}}}`,
+			json: `{"rules": {"4": {"required_tags": ["d", "client", "expiration"],
+			        "tag_limits": {"max_tags": 2, "max_tag_name_chars": 2, "max_tag_value_chars": 8}}}}`,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := policies.DefaultConfig().WithJSON([]byte(tc.json))
-			if err != nil {
-				t.Fatalf("failed to parse: %v", err)
-			}
-			err = cfg.Validate()
-			if err == nil || !strings.Contains(err.Error(), "no event could be accepted") {
+			if _, err := policies.DefaultConfig().WithJSON([]byte(tc.json)); err == nil || !strings.Contains(err.Error(), "no event could be accepted") {
 				t.Fatalf("expected the tag budget contradiction, got %v", err)
 			}
 		})
@@ -1706,7 +1460,7 @@ func TestTagBudgetMustFitRequiredTags(t *testing.T) {
 
 	// a budget that fits is fine, which is how the verbose example passes
 	ok := policies.DefaultConfig()
-	ok.Rules["4"].RuleSettings.TagLimits = policies.TagLimits{MaxTags: 3, MaxNameChars: 64, MaxValueChars: 256}
+	ok.Rules["4"].TagLimits = policies.TagLimits{MaxTags: 3, MaxNameChars: 64, MaxValueChars: 256}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("a budget equal to the mandatory tags must be accepted: %v", err)
 	}
@@ -1718,18 +1472,16 @@ func TestTagBudgetMustFitRequiredTags(t *testing.T) {
 // to be listed here, so adding a fixture without an expectation fails the build.
 func TestInvalidExamplesFail(t *testing.T) {
 	expectations := map[string]string{
-		"alias-conflict.json":          `both "size_limit" and "max_size"`,
 		"bad-duration.json":            "not an ISO-8601 duration",
 		"bad-regex.json":               "not a valid regular expression",
 		"bad-scope.json":               `scope "npub" must be ip`,
 		"bad-size.json":                "is not a size",
-		"duplicate-kind.json":          "defined twice",
 		"empty-whitelist.json":         "would serve nothing",
 		"ephemeral-kind.json":          "ephemeral",
 		"gate-conflict.json":           "cannot be combined",
 		"missing-shape-validator.json": "no registered shape validator",
-		// a one-tag budget on kind 4, which inherits a mandatory "p",
-		// "expiration" and "client": nothing could ever be published
+		// a two-tag budget against a mandatory "p", "expiration" and "client":
+		// nothing could ever be published
 		"tag-budget-impossible.json": "no event could be accepted",
 		"unknown-error-key.json":     "not one of",
 		"unknown-field.json":         `unknown field "contnet"`,
@@ -1766,49 +1518,6 @@ func TestInvalidExamplesFail(t *testing.T) {
 				t.Fatalf("%s was refused for the wrong reason:\n got %v\nwant something containing %q", name, err, reason)
 			}
 		})
-	}
-}
-
-// strict-incomplete.example.json is the mirror image of the invalid fixtures: it
-// is a perfectly good patch — a single setting — and the only thing that refuses
-// it is strict mode, because a patch is not an explicit configuration.
-func TestStrictModeRefusesAPatch(t *testing.T) {
-	data, err := os.ReadFile("../examples/bkind/strict-incomplete.example.json")
-	if err != nil {
-		t.Fatalf("failed to read the example: %v", err)
-	}
-
-	// lenient: accepted, and it means what it says
-	cfg, err := policies.DefaultConfig().WithJSON(data)
-	if err != nil {
-		t.Fatalf("the example must be accepted in lenient mode: %v", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("the example must validate in lenient mode: %v", err)
-	}
-	if cfg.MaxSize.Bytes != 512 {
-		t.Fatalf("the patch did not apply: max_size is %d", cfg.MaxSize.Bytes)
-	}
-
-	// strict: refused, and the error names the first missing top-level field
-	var strict policies.Config
-	if _, err := strict.WithStrictJSON(data); err == nil {
-		t.Fatal("strict mode accepted a patch")
-	} else if !strings.Contains(err.Error(), "incomplete configuration") || !strings.Contains(err.Error(), "print-config") {
-		t.Fatalf("the strict error does not explain itself: %v", err)
-	}
-
-	// freezing the resolved document is the way in: it is accepted as-is
-	frozen, err := cfg.JSON()
-	if err != nil {
-		t.Fatalf("failed to render: %v", err)
-	}
-	var reparsed policies.Config
-	if reparsed, err = reparsed.WithStrictJSON(frozen); err != nil {
-		t.Fatalf("the frozen document must be accepted in strict mode: %v", err)
-	}
-	if err := reparsed.Validate(); err != nil {
-		t.Fatalf("the frozen document does not validate: %v", err)
 	}
 }
 

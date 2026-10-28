@@ -37,9 +37,9 @@ type kindAccess struct {
 // policy, the COUNT policy, live delivery and the NIP-11 document — is derived
 // from one KindRules value, so they cannot disagree.
 //
-// The value is built from the per-kind rules by Config.kindRules. A kind in
-// Allowed without a rule gets the strictest access: readable by its author
-// only, after authentication.
+// The value is built from the per-kind rules by Config.KindRules. A kind without
+// an access entry (an ephemeral kind admitted by allow_ephemeral) gets the
+// strictest access: readable by its author only, after authentication.
 type KindRules struct {
 	// Allowed is the complete set of kinds the relay accepts and serves.
 	Allowed []uint16
@@ -163,9 +163,10 @@ func (k KindRules) OverwriteFilters() func(context.Context, *nostr.Filter) {
 	}
 }
 
-// accessFor returns the read rules of a served kind. A kind in Allowed without
-// an access entry reads as the strictest class, which is also the default for
-// a kind the config gave no rule.
+// accessFor returns the read rules of a served kind. Config.KindRules fills an
+// entry for every kind in Allowed, so a miss here means the kind was admitted by
+// allow_ephemeral: it reads as the strictest class, since no rule was written for
+// it.
 func (k KindRules) accessFor(kind uint16) kindAccess {
 	if acc, ok := k.access[kind]; ok {
 		return acc

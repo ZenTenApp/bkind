@@ -39,10 +39,11 @@ is **not** used (its 2-per-3-minutes event limit contradicts our numbers).
 
 ## Design decisions
 
-1. **Content is capped at 4096 bytes**, not the serialized event. Tags and JSON
-   overhead live inside the websocket frame limit only.
+1. **Content is capped at 4096 bytes**, not the serialized event, which has its own
+   `max_event_size` budget. Tags and JSON overhead live inside the websocket frame
+   limit as well.
 2. **Kinds `{4, 5, 62}`.** The set is `kinds.whitelist` in
-   `policies.DefaultConfig`, not a literal in the wiring, and the write gate, the filter
+   `policies/default.json`, not a literal in the wiring, and the write gate, the filter
    rewrite, reads, `COUNT`, live delivery and NIP-11 all derive from it — see
    [Configuring a relay](./configuration.md). Kind 5 lets a sender delete their own DM. Kind 62 is
    the "request to vanish" counterpart: purge the identity's whole footprint.
@@ -207,7 +208,9 @@ by hand.
   author, silent pass for internal calls.
 - `RequireExpiration(max)` — exactly one tag, integer, `now < expiration <= now+max`.
 - `RequireTag(name)` — exactly one, non-empty.
-- `MaxContentLen(n)`.
+- `MaxContentLen(n)` — the content limit (`max_event_content_size`).
+- `MaxEventLen(n)` and `EventLen(event)` — the whole-event limit
+  (`max_event_size`), measured on the serialized event.
 - `TagShapeLimits(maxTags, maxNameLen, maxValueLen)` — every tag, every element,
   unlike `PreventLargeTags`, which only looks at single-letter names and `tag[1]`.
 - `ValidateKind4Shape`, `ValidateKind5Shape`, `ValidateKind62Shape`.
@@ -218,8 +221,8 @@ is unexported, so a per-npub REQ limit could not be built outside the package.
 ## Wiring
 
 `examples/bkind/main.go` no longer lists policies. It loads a `policies.Config`
-(defaults, then `BKIND_CONFIG`, then `BKIND_KINDS`, then flags) and calls one
-function:
+(the embedded document, then `BKIND_CONFIG`, then `BKIND_KINDS`, then flags) and
+calls one function:
 
 ```go
 if err := cfg.Wire(relay); err != nil { ... }
@@ -232,9 +235,10 @@ if err := cfg.Wire(relay); err != nil { ... }
 ```go
 k.RestrictKind(),            // the whitelist
 c.writePolicy(),             // the checks of the event's own effective rule —
-// the top-level defaults with the kind's rule laid over them — in this order:
+// the kind's own rule, in this order:
 //   write.allow, require_auth, max_age_of_event, max_age_event_in_future,
-//   max_expiration + required_tags, tag_patterns, max_size, tag_limits,
+//   max_expiration + required_tags, tag_patterns, max_event_size,
+//   max_event_content_size, tag_limits,
 //   p_tag, the shape validator, the kind's write rate limits
 ```
 
@@ -250,8 +254,8 @@ server stay explicit in `main.go` — they are structure, not policy.
 
 ## Tests
 
-- `bkind_test.go` wires the reference config (`policies.DefaultConfig()`, rate limits
-  off) and drives it over a real
+- `bkind_test.go` wires the reference config (`policies.DefaultConfig()`, which is the
+  embedded document; rate limits off) and drives it over a real
   websocket: the NIP-42 challenge round trip, authorship binding, the whole
   `RejectEvent` table (kind, content size, expiration, client tag, tag shape,
   Kind 4 structure), the read matrix (author, recipient, third party,

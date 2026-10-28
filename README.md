@@ -28,7 +28,7 @@ in [`examples/bkind/main.go`](./examples/bkind/main.go).
 | **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is `kinds.whitelist` in the config, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `kinds.whitelist` |
 | **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `read.privileged` per kind, derived into `KindRules.ReadFilter`, `KindRules.PreventBroadcast`, `KindRules.RejectCount` (the `DM*` functions are wrappers over the default kind set) |
 | **Mandatory expiration, max 75h** | Exactly one `expiration` tag, a unix timestamp, in the future and no further than 75 hours away. Expired events are filtered out of queries even before the background sweep deletes them. | `required_tags: ["expiration", …]` + `max_expiration: "75h"` per kind |
-| **Max size 4 KB** | `len(content) <= 4096` bytes. The limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `max_size` per kind (`MaxContentLen` under it) |
+| **Max content 4 KB, event 64 KB** | `len(content) <= 4096` bytes, and the serialized event at most 64 KB. The content limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `max_event_content_size` and `max_event_size` per kind (`MaxContentLen` and `MaxEventLen` under them) |
 | **Mandatory tags** | Exactly one non-empty `client` tag, and the mandatory `expiration` tag above. | `required_tags` per kind (`RequireTag` under it) |
 | **Authenticated** | NIP-42 on writes and reads. The author of an event must equal the authenticated key. Rejections use the `auth-required:` prefix so clients know to authenticate and retry. | `require_auth` per kind (`RequireAuthedAuthor` under it) |
 | **Rate limits: 1h, 1d, per npub, per ip** | Writes: 30/hour and 200/day per npub; 60/hour and 400/day per IP, per kind. Reads: 60/hour and 400/day per npub; 120/hour and 800/day per IP. Connections: 120/hour per IP. | `rate_limits` (per kind, defaulted at the top level), `read_limits`, `connection_limits` |
@@ -123,24 +123,24 @@ BKIND_DB=./data go run ./examples/bkind # badger on disk, survives restarts
 
 It is the relay described above: authenticated Kind 4 messages, max 75 hours of
 retention, 4 KB of content, mandatory `expiration` and `client` tags, and the
-rate limits in the table. The whole policy set is data — `policies.Config`,
-keyed by kind — and the relay loads it as defaults, then a JSON file, then
-`BKIND_KINDS`, then flags:
+rate limits in the table. The whole policy set is one document —
+`policies/default.json`, embedded in the binary — and every per-kind setting
+lives in that kind's own rule: no top-level defaults, no inheritance. The relay
+loads the embedded document, then a JSON file, then `BKIND_KINDS`, then flags:
 
 ```bash
 BKIND_CONFIG=/etc/bkind/bkind.json go run ./examples/bkind   # a file
 BKIND_KINDS=4,5,62 go run ./examples/bkind                   # variables
 
-# an explicit configuration: the whole document, nothing inherited
+# your own copy of the whole document, to edit and keep in version control
 go run ./examples/bkind -print-config > bkind.json
-BKIND_CONFIG=bkind.json BKIND_CONFIG_STRICT=true go run ./examples/bkind
+BKIND_CONFIG=bkind.json go run ./examples/bkind
 ```
 
 | Env | Flag | Default | Meaning |
 |---|---|---|---|
 | `BKIND_CONFIG` | — | *(empty)* | path to a JSON policy file; see [Configuring a relay](./docs/cookbook/configuration.md) and `examples/bkind/*.example.json` |
 | `BKIND_CONFIG_JSON` | — | *(empty)* | the same document inline |
-| `BKIND_CONFIG_STRICT` | — | `false` | every field must be present in the file, so the relay does only what the file says |
 | `BKIND_ADDR` | `-addr` | `:3334` | listen address |
 | `BKIND_URL` | `-url` | *(empty)* | public `ws(s)://` URL; must match what clients connect to, used by NIP-42 and NIP-62 |
 | `BKIND_DB` | `-db` | *(empty)* | database directory; empty means in-memory and nothing is persisted |

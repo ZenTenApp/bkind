@@ -1,7 +1,9 @@
 {
   "rules": {
     "4": {
-      "tag_limits": {"max_tags": 1, "max_tag_name_chars": 8, "max_tag_value_chars": 64}
+      "p_tag": "hex",
+      "required_tags": ["expiration", "client"],
+      "tag_limits": {"max_tags": 2, "max_tag_name_chars": 8, "max_tag_value_chars": 64}
     }
   }
 }

@@ -17,17 +17,24 @@ import (
 type eventCheck func(context.Context, *nostr.Event) (bool, string)
 
 // AllowList is who may do a thing: "*" for anyone, or an explicit list of
-// pubkeys. An absent or empty list means anyone, so a rule that only says what
-// is limited does not have to repeat "and everyone may try".
+// pubkeys. An empty list means nobody: the wildcard is a word a document has to
+// write, so "nobody" and "everybody" can never be the same value. That matters
+// because the printed document shows an empty list as [], and [] must mean what
+// it looks like.
 type AllowList []string
 
-// Anyone reports whether the list is open: no list, or the "*" wildcard.
+// Anyone reports whether the list is the wildcard: exactly "*".
 func (g AllowList) Anyone() bool {
-	return len(g) == 0 || (len(g) == 1 && g[0] == "*")
+	return len(g) == 1 && g[0] == "*"
 }
 
-// Includes reports whether pubkey passes the list. An open list includes
-// everyone.
+// Nobody reports whether the list excludes everyone.
+func (g AllowList) Nobody() bool {
+	return len(g) == 0
+}
+
+// Includes reports whether pubkey passes the list. Only the wildcard includes
+// everyone; an empty list includes no one.
 func (g AllowList) Includes(pubkey string) bool {
 	return g.Anyone() || slices.Contains(g, pubkey)
 }
@@ -49,7 +56,7 @@ func (g *AllowList) UnmarshalJSON(data []byte) error {
 	}
 
 	var keys []string
-	if err := strictUnmarshal(data, &keys); err != nil {
+	if err := json.Unmarshal(data, &keys); err != nil {
 		return fmt.Errorf("allow must be \"*\" or a list of pubkeys: %w", err)
 	}
 	*g = keys
@@ -94,30 +101,23 @@ type RateLimit struct {
 	Window Duration `json:"window"`
 }
 
-// strictUnmarshal decodes with unknown fields refused, so a typo inside a
-// nested rule object is an error like a typo anywhere else.
-func strictUnmarshal(data []byte, v any) error {
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
 // errorMessageKeys are the rejection templates a kind rule can override. The
 // keys are stable API: a client can rely on the default wording changing
 // between versions, but not on which rejections exist.
 var errorMessageKeys = map[string]bool{
-	"write_denied":  true,
-	"auth_required": true,
-	"too_old":       true,
-	"in_future":     true,
-	"expiration":    true,
-	"missing_tag":   true,
-	"p_tag":         true,
-	"tag_pattern":   true,
-	"max_size":      true,
-	"tag_limits":    true,
-	"rate_limited":  true,
-	"shape":         true,
+	"write_denied":   true,
+	"auth_required":  true,
+	"too_old":        true,
+	"in_future":      true,
+	"expiration":     true,
+	"missing_tag":    true,
+	"p_tag":          true,
+	"tag_pattern":    true,
+	"max_event_size": true,
+	"max_size":       true,
+	"tag_limits":     true,
+	"rate_limited":   true,
+	"shape":          true,
 }
 
 // render fills the {placeholders} of a custom rejection message: "blocked: event
@@ -364,12 +364,28 @@ func (r *KindRule) tagPatternCheck() eventCheck {
 	})
 }
 
-// maxSizeCheck is the content limit of this kind, in bytes of content.
-func (r *KindRule) maxSizeCheck() eventCheck {
-	if r.MaxSize.Bytes <= 0 {
+// maxEventSizeCheck is the whole-event limit of this kind: the event as it
+// would go on the wire, id, signature and tags included.
+func (r *KindRule) maxEventSizeCheck() eventCheck {
+	if r.MaxEventSize.Bytes <= 0 {
 		return nil
 	}
-	limit := r.MaxSize.Bytes
+	limit := r.MaxEventSize.Bytes
+	inner := MaxEventLen(limit)
+	return r.withTemplate("max_event_size", inner, func(evt *nostr.Event) map[string]string {
+		return map[string]string{
+			"size":  strconv.Itoa(EventLen(evt)),
+			"limit": strconv.Itoa(limit),
+		}
+	})
+}
+
+// contentSizeCheck is the content limit of this kind, in bytes of content.
+func (r *KindRule) contentSizeCheck() eventCheck {
+	if r.MaxEventContentSize.Bytes <= 0 {
+		return nil
+	}
+	limit := r.MaxEventContentSize.Bytes
 	inner := MaxContentLen(limit)
 	return r.withTemplate("max_size", inner, func(evt *nostr.Event) map[string]string {
 		return map[string]string{
@@ -443,7 +459,10 @@ func (r *KindRule) checks(kind uint16) []eventCheck {
 	if check := r.tagPatternCheck(); check != nil {
 		out = append(out, check)
 	}
-	if check := r.maxSizeCheck(); check != nil {
+	if check := r.maxEventSizeCheck(); check != nil {
+		out = append(out, check)
+	}
+	if check := r.contentSizeCheck(); check != nil {
 		out = append(out, check)
 	}
 	if check := r.tagLimitsCheck(); check != nil {
