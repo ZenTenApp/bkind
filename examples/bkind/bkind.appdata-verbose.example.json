@@ -1,0 +1,112 @@
+{
+  "kinds": {
+    "whitelist": [5, 37801, 37802]
+  },
+  "p_tag": "",
+  "max_expiration": 0,
+  "required_tags": ["d"],
+  "rules": {
+    "37801": {
+      "description": "Master account backup event",
+      "write": {
+        "allow": "*"
+      },
+      "read": {
+        "allow": "*",
+        "privileged": true
+      },
+      "require_auth": true,
+      "max_size": "4KB",
+      "tag_patterns": {
+        "d": "^vaultkey$"
+      },
+      "tag_limits": {
+        "max_tags": 1,
+        "max_tag_name_chars": 1,
+        "max_tag_value_chars": 8
+      },
+      "rate_limits": [
+        {
+          "limit": 100,
+          "window": "1h",
+          "scope": "npub"
+        },
+        {
+          "limit": 1000,
+          "window": "1d",
+          "scope": "npub"
+        },
+        {
+          "limit": 300,
+          "window": "1h",
+          "scope": "ip"
+        },
+        {
+          "limit": 2500,
+          "window": "1d",
+          "scope": "ip"
+        }
+      ],
+      "errors": {
+        "auth_required": "auth-required: authentication required to publish this kind",
+        "max_size": "blocked: event exceeds size limit ({size} > {limit})",
+        "missing_tag": "invalid: missing required tag: {tag}",
+        "p_tag": "invalid: p tag requirement not met",
+        "expiration": "blocked: expiration exceeds max_expiry_duration",
+        "rate_limited": "rate-limited: rate limit exceeded for this kind",
+        "tag_limits": "invalid: {detail}"
+      }
+    },
+    "37802": {
+      "description": "Associated account backup event",
+      "write": {
+        "allow": "*"
+      },
+      "read": {
+        "allow": "*",
+        "privileged": true
+      },
+      "require_auth": true,
+      "max_size": "4KB",
+      "tag_patterns": {
+        "d": "^[0-9]{16}$"
+      },
+      "tag_limits": {
+        "max_tags": 1,
+        "max_tag_name_chars": 1,
+        "max_tag_value_chars": 16
+      },
+      "rate_limits": [
+        {
+          "limit": 100,
+          "window": "1h",
+          "scope": "npub"
+        },
+        {
+          "limit": 1000,
+          "window": "1d",
+          "scope": "npub"
+        },
+        {
+          "limit": 300,
+          "window": "1h",
+          "scope": "ip"
+        },
+        {
+          "limit": 2500,
+          "window": "1d",
+          "scope": "ip"
+        }
+      ],
+      "errors": {
+        "auth_required": "auth-required: authentication required to publish this kind",
+        "max_size": "blocked: event exceeds size limit ({size} > {limit})",
+        "missing_tag": "invalid: missing required tag: {tag}",
+        "p_tag": "invalid: p tag requirement not met",
+        "expiration": "blocked: expiration exceeds max_expiry_duration",
+        "rate_limited": "rate-limited: rate limit exceeded for this kind",
+        "tag_limits": "invalid: {detail}"
+      }
+    }
+  }
+}

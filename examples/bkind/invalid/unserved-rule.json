@@ -1,0 +1,12 @@
+{
+  "kinds": {
+    "whitelist": [
+      4
+    ]
+  },
+  "rules": {
+    "7": {
+      "max_size": 64
+    }
+  }
+}

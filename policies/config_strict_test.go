@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// TestStrictSchemaCoversEveryField keeps the hand-written schema in step with Config.
-// Without it, a field added to the struct is neither required by strict mode nor
-// caught by the round trip — the document simply would not mention it, and an
-// operator's "explicit" file would be silently incomplete.
+// TestStrictSchemaCoversEveryField keeps the hand-written schema in step with
+// Config and KindRule. Without it, a field added to a struct is neither required
+// by strict mode nor caught by the round trip — the document simply would not
+// mention it, and an operator's "explicit" file would be silently incomplete.
 func TestStrictSchemaCoversEveryField(t *testing.T) {
-	// top level: every field of Config, except the ones that are not sections
+	// top level: every field of Config
 	var topLevel []string
 	for _, field := range reflect.VisibleFields(reflect.TypeOf(Config{})) {
 		if field.Anonymous || !field.IsExported() {
@@ -44,17 +44,74 @@ func TestStrictSchemaCoversEveryField(t *testing.T) {
 		var inStruct []string
 		for _, f := range reflect.VisibleFields(field.Type) {
 			if !f.IsExported() {
-				continue // the parsed durations
+				continue
 			}
 			inStruct = append(inStruct, jsonName(f))
 		}
 		slices.Sort(inStruct)
 		if have := slices.Clone(keys); !slices.Equal(sorted(have), inStruct) {
-			t.Fatalf("strictSections[%q] is out of date:\n has %v\nwants %v", section, sorted(have), inStruct)
+			t.Fatalf("strictSections[%q] is out of date:\n has %v\nwants %v", section, have, inStruct)
 		}
 	}
 
-	// rate limits
+	// rule bodies: every field of KindRule — the description, the rule-local
+	// settings and the inherited ones
+	var inRule []string
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(KindRule{})) {
+		if f.Anonymous || !f.IsExported() {
+			continue // the embedded settings are checked below, field by field
+		}
+		inRule = append(inRule, jsonName(f))
+	}
+	wantRule := append(append([]string{"description"}, strictRuleKeys...), ruleOnlyNames...)
+	if !slices.Equal(sorted(inRule), sorted(wantRule)) {
+		t.Fatalf("strictRuleKeys is out of date:\n has %v\nwants %v (KindRule fields)", wantRule, inRule)
+	}
+
+	// the defaults are the per-kind settings: same names, one definition
+	var inSettings []string
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(RuleSettings{})) {
+		if !f.IsExported() {
+			continue
+		}
+		inSettings = append(inSettings, jsonName(f))
+	}
+	if !slices.Equal(sorted(inSettings), sorted(slices.Clone(ruleFieldNames))) {
+		t.Fatalf("ruleFieldNames is out of date:\n has %v\nwants %v (RuleSettings fields)", ruleFieldNames, inSettings)
+	}
+
+	// gates, tag limits and rate limits
+	for gate, keys := range strictGateKeys {
+		var gateType reflect.Type
+		switch gate {
+		case "write":
+			gateType = reflect.TypeOf(WriteGate{})
+		case "read":
+			gateType = reflect.TypeOf(ReadGate{})
+		}
+		var inGate []string
+		for _, f := range reflect.VisibleFields(gateType) {
+			if !f.IsExported() {
+				continue
+			}
+			inGate = append(inGate, jsonName(f))
+		}
+		if !slices.Equal(sorted(inGate), sorted(slices.Clone(keys))) {
+			t.Fatalf("strictGateKeys[%q] is out of date:\n has %v\nwants %v", gate, keys, inGate)
+		}
+	}
+
+	var inTagLimits []string
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(TagLimits{})) {
+		if !f.IsExported() {
+			continue
+		}
+		inTagLimits = append(inTagLimits, jsonName(f))
+	}
+	if !slices.Equal(sorted(inTagLimits), sorted(slices.Clone(strictTagLimitKeys))) {
+		t.Fatalf("strictTagLimitKeys is out of date:\n has %v\nwants %v", strictTagLimitKeys, inTagLimits)
+	}
+
 	var inRateLimit []string
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(RateLimit{})) {
 		if !f.IsExported() {
@@ -67,9 +124,9 @@ func TestStrictSchemaCoversEveryField(t *testing.T) {
 	}
 }
 
-// TestJSONFieldNamesAreTheSchema is the other half: the names the schema demands are
-// the names the decoder will look for, so a renamed json tag cannot leave strict mode
-// requiring a field that no longer exists.
+// TestJSONFieldNamesAreTheSchema is the other half: the names the schema demands
+// are the names the decoder will look for, so a renamed json tag cannot leave
+// strict mode requiring a field that no longer exists.
 func TestJSONFieldNamesAreTheSchema(t *testing.T) {
 	document, err := DefaultConfig().JSON()
 	if err != nil {
@@ -86,6 +143,28 @@ func TestJSONFieldNamesAreTheSchema(t *testing.T) {
 			if !strings.Contains(string(document), `"`+key+`":`) {
 				t.Fatalf("the printed document has no %s.%s field", section, key)
 			}
+		}
+	}
+	for _, key := range strictRuleKeys {
+		if !strings.Contains(string(document), `"`+key+`":`) {
+			t.Fatalf("the printed document has no rules.<kind>.%s field", key)
+		}
+	}
+	for gate, keys := range strictGateKeys {
+		for _, key := range keys {
+			if !strings.Contains(string(document), `"`+key+`":`) {
+				t.Fatalf("the printed document has no %s.%s field", gate, key)
+			}
+		}
+	}
+	for _, key := range strictTagLimitKeys {
+		if !strings.Contains(string(document), `"`+key+`":`) {
+			t.Fatalf("the printed document has no tag_limits.%s field", key)
+		}
+	}
+	for _, key := range strictRateLimitKeys {
+		if !strings.Contains(string(document), `"`+key+`":`) {
+			t.Fatalf("the printed document has no rate_limits[].%s field", key)
 		}
 	}
 }

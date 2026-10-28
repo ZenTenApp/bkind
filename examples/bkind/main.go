@@ -3,9 +3,10 @@
 // (NIP-62). Everything is authenticated, everything expires, and a message is only
 // ever readable by its author and its recipient.
 //
-// The policy set is data, not code: it comes from policies.DefaultConfig, optionally
-// overridden by the JSON file named in BKIND_CONFIG (or BKIND_CONFIG_JSON), then by
-// the BKIND_* variables below, then by flags. See policies.Config for the fields.
+// The policy set is data, not code, and it is keyed by kind: it comes from
+// policies.DefaultConfig, optionally overridden by the JSON file named in
+// BKIND_CONFIG (or BKIND_CONFIG_JSON), then by BKIND_KINDS, then by flags. See
+// policies.Config for the fields.
 //
 // See docs/cookbook/dm-only-relay.md for the reasoning behind each policy,
 // docs/cookbook/deploying.md for running it on a server, and
@@ -22,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -81,14 +83,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	retention := "no expiration required"
-	if cfg.policies.Expiration.Required {
-		retention = fmt.Sprintf("expiration <= %s", cfg.policies.Expiration.MaxDuration())
+	retention := "no expiration policy"
+	for _, rule := range cfg.policies.EffectiveRules() {
+		if rule != nil && slices.Contains(rule.RequiredTags, "expiration") {
+			retention = fmt.Sprintf("mandatory NIP-40 expiration (max %s)", rule.MaxExpiration)
+			break
+		}
 	}
 
 	go func() {
-		log.Printf("listening on %s, serving %s (kinds %s, content <= %d bytes, %s)",
-			cfg.addr, cfg.serviceURL, kindList(cfg.policies.Kinds), cfg.policies.Content.Max, retention)
+		log.Printf("listening on %s, serving %s (kinds %s, %s)",
+			cfg.addr, cfg.serviceURL, kindList(cfg.policies.Kinds.Whitelist), retention)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server failed: %v", err)
 		}
@@ -108,8 +113,7 @@ func main() {
 }
 
 func parseConfig() config {
-	// defaults, then BKIND_CONFIG / BKIND_CONFIG_JSON, then the scalar BKIND_*
-	// variables, validated
+	// defaults, then BKIND_CONFIG / BKIND_CONFIG_JSON, then BKIND_KINDS, validated
 	policySet, err := policies.LoadConfig(os.LookupEnv)
 	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
@@ -119,38 +123,16 @@ func parseConfig() config {
 	serviceURL := envOr("BKIND_URL", "")
 	dbPath := envOr("BKIND_DB", "")
 	sweepInterval := envOr("BKIND_SWEEP_INTERVAL", defaultSweepInterval.String())
-	kinds := strings.Join(kindListInts(policySet.Kinds.Allowed), ",")
-	maxExpiration := policySet.Expiration.Max
-	requiredTags := strings.Join(policySet.Tags.Required, ",")
-	maxContentLen := strconv.Itoa(policySet.Content.Max)
-	maxTags := strconv.Itoa(policySet.Tags.Max)
-	maxTagNameLen := strconv.Itoa(policySet.Tags.MaxNameLen)
-	maxTagValueLen := strconv.Itoa(policySet.Tags.MaxValueLen)
-	allowEphemeral := policySet.Kinds.AllowEphemeral
-	requireExpiration := policySet.Expiration.Required
-	requireAuth := policySet.Auth.Required
-	rejectCount := policySet.Count.Reject
-	negentropy := policySet.Negentropy
-	printConfig := false
+	kinds := strings.Join(kindListInts(policySet.Kinds.Whitelist), ",")
 	nip11Name := policySet.NIP11.Name
 	nip11Description := policySet.NIP11.Description
+	printConfig := false
 
 	flag.StringVar(&addr, "addr", addr, "address to listen on")
 	flag.StringVar(&serviceURL, "url", serviceURL, "public URL of this relay (wss://...), used for NIP-42 and NIP-62")
 	flag.StringVar(&dbPath, "db", dbPath, "path of the database directory (empty means in-memory, nothing is persisted)")
 	flag.StringVar(&sweepInterval, "sweep-interval", sweepInterval, "how often expired events are deleted")
-	flag.StringVar(&kinds, "kinds", kinds, "comma-separated kinds the relay serves")
-	flag.StringVar(&maxExpiration, "max-expiration", maxExpiration, "longest allowed NIP-40 expiration")
-	flag.BoolVar(&requireExpiration, "require-expiration", requireExpiration, "require the mandatory NIP-40 expiration tag")
-	flag.StringVar(&requiredTags, "required-tags", requiredTags, "comma-separated tags every event must carry exactly once (empty for none)")
-	flag.StringVar(&maxContentLen, "max-content", maxContentLen, "maximum content length in bytes")
-	flag.StringVar(&maxTags, "max-tags", maxTags, "maximum number of tags")
-	flag.StringVar(&maxTagNameLen, "max-tag-name", maxTagNameLen, "maximum tag name length in bytes")
-	flag.StringVar(&maxTagValueLen, "max-tag-value", maxTagValueLen, "maximum tag value length in bytes")
-	flag.BoolVar(&allowEphemeral, "allow-ephemeral", allowEphemeral, "accept ephemeral kinds without listing them in -kinds")
-	flag.BoolVar(&requireAuth, "require-auth", requireAuth, "require NIP-42 authentication on reads and writes")
-	flag.BoolVar(&rejectCount, "reject-count", rejectCount, "refuse NIP-45 COUNT requests")
-	flag.BoolVar(&negentropy, "negentropy", negentropy, "enable NIP-77 negentropy set reconciliation")
+	flag.StringVar(&kinds, "kinds", kinds, "comma-separated kinds the relay serves; drops the rules of kinds it leaves out")
 	flag.StringVar(&nip11Name, "name", nip11Name, "relay name in the NIP-11 document")
 	flag.StringVar(&nip11Description, "description", nip11Description, "relay description in the NIP-11 document (empty derives one from -kinds)")
 	flag.BoolVar(&printConfig, "print-config", false, "print the resolved policy set as JSON and exit")
@@ -174,28 +156,8 @@ func parseConfig() config {
 		log.Fatalf("invalid -kinds: %v", err)
 	}
 	cfg.policies.SetKinds(parsedKinds)
-
-	cfg.policies.Expiration.Required = requireExpiration
-	cfg.policies.Expiration.Max = maxExpiration
-	cfg.policies.Tags.Required = splitTags(requiredTags)
-	cfg.policies.Auth.Required = requireAuth
-	cfg.policies.Count.Reject = rejectCount
-	cfg.policies.Negentropy = negentropy
 	cfg.policies.NIP11.Name = nip11Name
 	cfg.policies.NIP11.Description = nip11Description
-
-	if cfg.policies.Content.Max, err = strconv.Atoi(maxContentLen); err != nil {
-		log.Fatalf("invalid -max-content %q", maxContentLen)
-	}
-	if cfg.policies.Tags.Max, err = strconv.Atoi(maxTags); err != nil {
-		log.Fatalf("invalid -max-tags %q", maxTags)
-	}
-	if cfg.policies.Tags.MaxNameLen, err = strconv.Atoi(maxTagNameLen); err != nil {
-		log.Fatalf("invalid -max-tag-name %q", maxTagNameLen)
-	}
-	if cfg.policies.Tags.MaxValueLen, err = strconv.Atoi(maxTagValueLen); err != nil {
-		log.Fatalf("invalid -max-tag-value %q", maxTagValueLen)
-	}
 
 	// re-validate: a flag can break an invariant the environment respected
 	if err := cfg.policies.Validate(); err != nil {
@@ -339,9 +301,9 @@ func normalizeServiceURL(raw string) string {
 }
 
 // kindList renders a kind set for a log line.
-func kindList(k policies.KindRules) string {
-	parts := make([]string, 0, len(k.Allowed))
-	for _, kind := range k.Sorted() {
+func kindList(kinds []uint16) string {
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
 		parts = append(parts, strconv.Itoa(int(kind)))
 	}
 	return strings.Join(parts, "/")
@@ -372,16 +334,6 @@ func parseKinds(raw string) ([]uint16, error) {
 		return nil, fmt.Errorf("no kinds given")
 	}
 	return kinds, nil
-}
-
-func splitTags(raw string) []string {
-	tags := make([]string, 0, 2)
-	for _, item := range strings.Split(raw, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			tags = append(tags, item)
-		}
-	}
-	return tags
 }
 
 func envOr(key, fallback string) string {

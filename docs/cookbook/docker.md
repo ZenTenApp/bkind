@@ -119,8 +119,8 @@ Everything else has a sane default baked into the binary: the policy set is
 the [configuration table](./deploying.md#_4-configuration) for what each variable means,
 and [Configuring a relay](./configuration.md) for the JSON policy file.
 
-For anything structured — rate limits, which kinds are private to their recipient, the
-per-kind shape validators — mount a policy file and point `BKIND_CONFIG` at it:
+For anything structured — per-kind limits and gates, rate limits, error
+templates — mount a policy file and point `BKIND_CONFIG` at it:
 
 ```yaml
     environment:

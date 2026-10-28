@@ -1,0 +1,12 @@
+{
+  "kinds": {
+    "whitelist": [
+      1059
+    ]
+  },
+  "rules": {
+    "1059": {
+      "shape": true
+    }
+  }
+}

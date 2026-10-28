@@ -51,7 +51,7 @@ orphans an operator's config, logs, unit file or volume.
 
 | Surface | Value | Why frozen |
 |---|---|---|
-| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_CONFIG`, `BKIND_CONFIG_JSON`, `BKIND_CONFIG_STRICT`, `BKIND_KINDS`, `BKIND_MAX_EXPIRATION`, `BKIND_REQUIRE_EXPIRATION`, `BKIND_REQUIRED_TAGS`, `BKIND_MAX_CONTENT`, `BKIND_MAX_TAGS`, `BKIND_MAX_TAG_NAME`, `BKIND_MAX_TAG_VALUE`, `BKIND_REQUIRE_AUTH`, `BKIND_REJECT_COUNT`, `BKIND_NEGENTROPY`, `BKIND_NAME`, `BKIND_DESCRIPTION` | an operator's `.env` and systemd `EnvironmentFile` |
+| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_CONFIG`, `BKIND_CONFIG_JSON`, `BKIND_CONFIG_STRICT`, `BKIND_KINDS`, `BKIND_NAME`, `BKIND_DESCRIPTION` | an operator's `.env` and systemd `EnvironmentFile` |
 | Log prefix | `[bkind]` | what people grep in journals |
 | systemd unit | `bkind.service` | `systemctl` name in every runbook |
 | Config dir | `/etc/bkind/` | |
