@@ -138,7 +138,7 @@ BKIND_CONFIG=bkind.json BKIND_CONFIG_STRICT=true go run ./examples/bkind
 
 | Env | Flag | Default | Meaning |
 |---|---|---|---|
-| `BKIND_CONFIG` | — | *(empty)* | path to a JSON policy file; see [Configuring a relay](./docs/cookbook/configuration.md) |
+| `BKIND_CONFIG` | — | *(empty)* | path to a JSON policy file; see [Configuring a relay](./docs/cookbook/configuration.md) and `examples/bkind/*.example.json` |
 | `BKIND_CONFIG_JSON` | — | *(empty)* | the same document inline |
 | `BKIND_CONFIG_STRICT` | — | `false` | every field must be present in the file, so the relay does only what the file says |
 | `BKIND_ADDR` | `-addr` | `:3334` | listen address |

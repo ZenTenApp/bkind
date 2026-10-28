@@ -164,6 +164,18 @@ func validateFields(f *RuleSettings, where string) error {
 		if f.TagLimits.MaxTags <= 0 || f.TagLimits.MaxNameChars <= 0 || f.TagLimits.MaxValueChars <= 0 {
 			return fmt.Errorf("%s: tag_limits: when any limit is set, all three must be positive", where)
 		}
+
+		// a tag budget smaller than the tags the rule demands itself is a relay
+		// that rejects everything: better to say so at startup than to let an
+		// operator wonder why nothing publishes
+		mandatory := append([]string(nil), f.RequiredTags...)
+		if f.PTag == "hex" {
+			mandatory = append(mandatory, "p")
+		}
+		if len(mandatory) > f.TagLimits.MaxTags {
+			return fmt.Errorf("%s: tag_limits.max_tags is %d but %s must be present, so no event could be accepted",
+				where, f.TagLimits.MaxTags, quoteList(mandatory))
+		}
 	}
 
 	if err := validateRateLimits(where+".rate_limits", f.RateLimits, "npub", "ip"); err != nil {
@@ -177,6 +189,22 @@ func validateFields(f *RuleSettings, where string) error {
 	}
 
 	return nil
+}
+
+// quoteList renders tags for a rejection message: `"p", "expiration" and "client"`.
+func quoteList(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	switch len(quoted) {
+	case 0:
+		return "no tag"
+	case 1:
+		return quoted[0]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
 }
 
 func sortedErrorKeys() []string {

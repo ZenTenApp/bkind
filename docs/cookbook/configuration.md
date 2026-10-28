@@ -47,6 +47,17 @@ That is the whole set, and it is exactly what `bkind -print-config` prints for
 the default configuration (`examples/bkind/bkind.example.json`, compared byte for
 byte by a test).
 
+Three example documents ship with the relay, and a test loads, validates and
+renders every one of them:
+
+| File | Shape |
+|---|---|
+| `bkind.example.json` | the reference DM relay; the output of `-print-config` |
+| `bkind.nip17.example.json` | kinds 4 + 1059 in the summary spelling, per-kind age windows |
+| `bkind.dm-verbose.example.json` | the same kinds spelled in full, with their own write limits and rejection wording |
+| `bkind.appdata.example.json` | addressable backup kinds (5, 37801, 37802) told apart by a `d` pattern |
+| `bkind.appdata-verbose.example.json` | the same, in full, with a one-tag budget per kind |
+
 ## Precedence
 
 Each layer overrides the one before it:
@@ -154,7 +165,7 @@ overrides).
 | `p_tag` | none | `"hex"`: exactly one `p` tag, a valid pubkey, not the author |
 | `required_tags` | none | tags that must appear exactly once, non-empty; `"expiration"` here makes NIP-40 mandatory |
 | `tag_patterns` | none | tag name → regular expression every value of that tag must match |
-| `tag_limits` | none | `max_tags`, `max_tag_name_chars`, `max_tag_value_chars` |
+| `tag_limits` | none | `max_tags`, `max_tag_name_chars`, `max_tag_value_chars`. A `max_tags` smaller than the tags the rule demands (`required_tags` plus `p_tag`) is a startup error — it would reject every event |
 | `rate_limits` | none | write limits for this kind: `{scope, limit, window}` |
 | `shape` | off | run the registered structural validator for this kind (registry in `policies/kinds.go`); a rule only, never inherited |
 | `errors` | built-ins | rejection message templates, see below |
@@ -227,6 +238,12 @@ are stable; the built-in wording may change between versions, the keys do not.
 | `rate_limited` | the write limits of the kind | — |
 | `shape` | the structural validator | — |
 
+`{detail}` is always available and carries the built-in message, so a template
+can wrap the specific reason instead of replacing it with a generic one:
+`"tag_limits": "{detail}"` keeps "invalid: too many tags (33, max 32)" while
+`"missing_tag": "invalid: missing required tag: {tag}"` replaces that rejection
+with the operator's wording.
+
 ```json
 "errors": {
   "max_size": "blocked: event exceeds size limit ({size} > {limit})",
@@ -292,7 +309,8 @@ Defaults that suit a public kind, and no rules at all — the kind inherits them
 
 ### Kind 4 plus NIP-17 gift wraps
 
-The DM defaults stay, and the new kind names only what differs:
+`examples/bkind/bkind.nip17.example.json` is this shape in full, in the summary
+spelling. The DM defaults stay, and the new kind names only what differs:
 
 ```json
 {
@@ -307,6 +325,15 @@ A `1059` reaches its author and its `p` (inherited: `read.privileged` and
 `p_tag: "hex"`), and a filter must pin one of them. A gift wrap is signed by a
 throwaway key, so `require_auth: false` turns off the inherited NIP-42 check for
 that kind alone.
+
+The checked-in example takes the other route — it keeps the inherited
+`require_auth` — and differs from the defaults only in what a DM relay over both
+kinds needs:
+
+```sh
+BKIND_CONFIG=examples/bkind/bkind.nip17.example.json go run ./examples/bkind
+bkind -print-config   # with that BKIND_CONFIG set: shows the resolved rules
+```
 
 ### The summary spelling
 

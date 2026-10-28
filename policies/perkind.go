@@ -138,10 +138,21 @@ func (r *KindRule) withTemplate(key string, inner eventCheck, vars func(*nostr.E
 		if !reject {
 			return false, ""
 		}
-		if tpl, ok := r.Errors[key]; ok {
-			return true, render(tpl, vars(evt))
+		tpl, ok := r.Errors[key]
+		if !ok {
+			return true, msg
 		}
-		return true, msg
+
+		values := vars(evt)
+		if values == nil {
+			values = map[string]string{}
+		}
+		// {detail} is always available: the built-in message, so a template can
+		// wrap the specific reason instead of replacing it with a generic one
+		if _, ok := values["detail"]; !ok {
+			values["detail"] = msg
+		}
+		return true, render(tpl, values)
 	}
 }
 

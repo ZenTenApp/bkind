@@ -1,0 +1,19 @@
+{
+  "kind": {
+    "whitelist": [5, 37801, 37802]
+  },
+  "rules": {
+    "37801": {
+      "description": "Master account backup event",
+      "privileged": true,
+      "size_limit": 4096,
+      "identifier_regex": "^vaultkey$"
+    },
+    "37802": {
+      "description": "Associated account backup event",
+      "privileged": true,
+      "size_limit": 4096,
+      "identifier_regex": "^[0-9]{16}$"
+    }
+  }
+}

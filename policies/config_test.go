@@ -50,6 +50,15 @@ func nearExpiration() nostr.Tag {
 	return nostr.Tag{"expiration", strconv.FormatInt(int64(nostr.Now()+3600), 10)}
 }
 
+// extraTags builds n filler tags, for the tag-count limits.
+func extraTags(n int) nostr.Tags {
+	tags := make(nostr.Tags, 0, n)
+	for i := 0; i < n; i++ {
+		tags = append(tags, nostr.Tag{"t", "filler"})
+	}
+	return tags
+}
+
 // the test keys are real pubkeys, because allow lists and "p" tags validate
 // them as secp256k1 points, not just as hex
 var (
@@ -854,6 +863,22 @@ func TestErrorTemplates(t *testing.T) {
 		t.Fatalf("the custom missing_tag message was not rendered: %v %q", reject, msg)
 	}
 
+	// {detail} carries the built-in message, so a template can wrap the reason
+	// instead of replacing it
+	detailed := policies.DefaultConfig()
+	detailed.Rules["4"].Errors = map[string]string{"tag_limits": "invalid: {detail}"}
+	relay, _ = wire(t, detailed)
+	write = writePolicy(relay)
+	tooManyTags := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+		Tags: append(nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}, extraTags(20)...)}
+	reject, msg := write(aliceCtx(), tooManyTags)
+	if !reject {
+		t.Fatal("an event with too many tags must be refused")
+	}
+	if !strings.Contains(msg, "too many tags") || !strings.HasPrefix(msg, "invalid: ") {
+		t.Fatalf("{detail} did not carry the built-in reason: %q", msg)
+	}
+
 	// a rejection with no template keeps the built-in message
 	untagged := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 4097),
 		Tags: nostr.Tags{{"p", bobKey}, {"client", "x"}}}
@@ -1277,6 +1302,413 @@ func TestStrictJSONRequiresEveryField(t *testing.T) {
 		t.Fatal("strict mode accepted an empty document")
 	} else if !strings.Contains(err.Error(), "print-config") {
 		t.Fatalf("the error does not point at -print-config: %v", err)
+	}
+}
+
+// Every example document in the repository must load and validate, or the docs
+// teach a config the binary refuses. Walks the directory, so a new example is
+// covered the moment it is added.
+func TestExampleConfigFilesValidate(t *testing.T) {
+	paths, err := filepath.Glob("../examples/bkind/*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("expected the example documents, found %v", paths)
+	}
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", path, err)
+		}
+		cfg, err := policies.DefaultConfig().WithJSON(data)
+		if err != nil {
+			t.Fatalf("%s does not parse: %v", path, err)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("%s does not validate: %v", path, err)
+		}
+		if _, err := cfg.JSON(); err != nil {
+			t.Fatalf("%s does not render: %v", path, err)
+		}
+	}
+}
+
+// The NIP-17-style example: kinds 4 and 1059, both privileged, each with its own
+// age window, in the summary spelling. It is a patch on the defaults, so what it
+// does not name comes from the top level — this test pins which is which.
+func TestNIP17ExampleResolves(t *testing.T) {
+	data, err := os.ReadFile("../examples/bkind/bkind.nip17.example.json")
+	if err != nil {
+		t.Fatalf("failed to read the example: %v", err)
+	}
+	cfg, err := policies.DefaultConfig().WithJSON(data)
+	if err != nil {
+		t.Fatalf("the example does not parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the example does not validate: %v", err)
+	}
+
+	if got := cfg.Kinds.Whitelist; len(got) != 2 || got[0] != 4 || got[1] != 1059 {
+		t.Fatalf("whitelist is %v, want [4 1059]", got)
+	}
+
+	dm, giftWrap := cfg.EffectiveRule(4), cfg.EffectiveRule(1059)
+	for _, tc := range []struct {
+		kind int
+		rule *policies.KindRule
+		age  time.Duration
+	}{
+		{4, dm, time.Hour},
+		{1059, giftWrap, 48 * time.Hour},
+	} {
+		if tc.rule.MaxAge.Duration != tc.age {
+			t.Fatalf("kind %d max_age_of_event is %v, want %v", tc.kind, tc.rule.MaxAge.Duration, tc.age)
+		}
+		if tc.rule.MaxFutureAge.Duration != time.Minute {
+			t.Fatalf("kind %d max_age_event_in_future is %v", tc.kind, tc.rule.MaxFutureAge.Duration)
+		}
+		if tc.rule.MaxSize.Bytes != 4096 || tc.rule.MaxExpiration.Duration != 72*time.Hour {
+			t.Fatalf("kind %d size/expiry is %+v", tc.kind, tc.rule)
+		}
+		if !tc.rule.Read.Privileged {
+			t.Fatalf("kind %d must be privileged", tc.kind)
+		}
+		// inherited: the p rule that makes a privileged kind recipient-visible
+		if tc.rule.PTag != "hex" {
+			t.Fatalf("kind %d inherited no p rule: %q", tc.kind, tc.rule.PTag)
+		}
+		if len(tc.rule.RequiredTags) != 3 {
+			t.Fatalf("kind %d required_tags are %v", tc.kind, tc.rule.RequiredTags)
+		}
+	}
+
+	// both kinds are recipient-visible: author and "p" only
+	_, rules := wire(t, cfg)
+	for _, kind := range []int{4, 1059} {
+		if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{kind}, Authors: []string{bobKey}}); msg == "" {
+			t.Fatalf("kind %d: a third party could read a privileged event", kind)
+		}
+		if reject, _ := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{kind}, Authors: []string{aliceKey}}); reject {
+			t.Fatalf("kind %d: the author could not read their own event", kind)
+		}
+	}
+
+	// the age window is enforced per kind: the same event is too old for a DM
+	// and fine for a gift wrap
+	relay, _ := wire(t, cfg)
+	write := writePolicy(relay)
+	threeHoursAgo := nostr.Now() - 3*3600
+	evt := func(kind int) *nostr.Event {
+		return &nostr.Event{Kind: kind, PubKey: aliceKey, CreatedAt: threeHoursAgo, Content: "x",
+			Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	}
+	if reject, msg := write(aliceCtx(), evt(4)); !reject || !strings.Contains(msg, "too old") {
+		t.Fatalf("kind 4 accepted an event older than an hour: %v %q", reject, msg)
+	}
+	if reject, msg := write(aliceCtx(), evt(1059)); reject {
+		t.Fatalf("kind 1059 refused an event inside its two-day window: %q", msg)
+	}
+}
+
+// The verbose example: kinds 4 and 1059 spelled in full, with their own write
+// limits and rejection wording. It is the "one document describes each kind"
+// shape, so nothing about the two kinds may silently lean on a default.
+func TestDMVerboseExampleResolves(t *testing.T) {
+	data, err := os.ReadFile("../examples/bkind/bkind.dm-verbose.example.json")
+	if err != nil {
+		t.Fatalf("failed to read the example: %v", err)
+	}
+	cfg, err := policies.DefaultConfig().WithJSON(data)
+	if err != nil {
+		t.Fatalf("the example does not parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the example does not validate: %v", err)
+	}
+
+	// the top-level kind keys were folded into rules
+	if len(cfg.Rules) != 2 || cfg.Rules["4"] == nil || cfg.Rules["1059"] == nil {
+		t.Fatalf("the two kinds did not land in rules: %v", cfg.Rules)
+	}
+
+	for _, kind := range []uint16{4, 1059} {
+		rule := cfg.EffectiveRule(kind)
+		if !rule.Read.Privileged || !rule.RequireAuth || rule.PTag != "hex" {
+			t.Fatalf("kind %d should be privileged, authenticated and recipient-visible: %+v", kind, rule)
+		}
+		if rule.MaxSize.Bytes != 4096 || rule.MaxExpiration.Duration != 75*time.Hour {
+			t.Fatalf("kind %d size/expiry is %+v", kind, rule)
+		}
+		if rule.TagLimits.MaxTags != 32 || rule.TagLimits.MaxNameChars != 32 || rule.TagLimits.MaxValueChars != 128 {
+			t.Fatalf("kind %d tag_limits are %+v", kind, rule.TagLimits)
+		}
+		if len(rule.RateLimits) != 4 {
+			t.Fatalf("kind %d has %d write limits", kind, len(rule.RateLimits))
+		}
+		for i, want := range []struct {
+			scope string
+			limit int
+		}{{"npub", 100}, {"npub", 1000}, {"ip", 300}, {"ip", 2500}} {
+			got := rule.RateLimits[i]
+			if got.Scope != want.scope || got.Limit != want.limit {
+				t.Fatalf("kind %d rate_limits[%d] is %+v, want %v/%d", kind, i, got, want.scope, want.limit)
+			}
+		}
+		if len(rule.Errors) != len(errorTemplateKeysForTest) {
+			t.Fatalf("kind %d carries %d templates, want %d", kind, len(rule.Errors), len(errorTemplateKeysForTest))
+		}
+	}
+
+	relay, _ := wire(t, cfg)
+	write := writePolicy(relay)
+
+	// the operator's wording reaches the client, placeholders filled
+	dm := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 4097),
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), dm); !reject || msg != "blocked: event exceeds size limit (4097 > 4096)" {
+		t.Fatalf("the max_size template did not apply: %v %q", reject, msg)
+	}
+
+	// the tag limit is theirs (32), not the default's (16)
+	atLimit := &nostr.Event{Kind: 1059, PubKey: aliceKey, Content: "ciphertext",
+		Tags: append(nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}, extraTags(29)...)}
+	if reject, msg := write(aliceCtx(), atLimit); reject {
+		t.Fatalf("32 tags is inside this relay's tag_limits: %q", msg)
+	}
+	overLimit := &nostr.Event{Kind: 1059, PubKey: aliceKey, Content: "ciphertext",
+		Tags: append(nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}, extraTags(30)...)}
+	if reject, msg := write(aliceCtx(), overLimit); !reject || !strings.HasPrefix(msg, "invalid: ") || !strings.Contains(msg, "too many tags") {
+		t.Fatalf("33 tags must be refused with the {detail} template: %v %q", reject, msg)
+	}
+}
+
+// the templates the verbose example defines
+var errorTemplateKeysForTest = []string{
+	"auth_required", "max_size", "missing_tag", "p_tag", "expiration", "rate_limited", "tag_limits",
+}
+
+// The AppData example: addressable backup kinds, told apart by a "d" tag
+// pattern. It is a patch on the reference defaults, and this test pins what it
+// therefore inherits — including the parts a backup relay probably does not want
+// (a required "p" tag, and a mandatory expiration capped at 75h).
+func TestAppDataExampleResolves(t *testing.T) {
+	data, err := os.ReadFile("../examples/bkind/bkind.appdata.example.json")
+	if err != nil {
+		t.Fatalf("failed to read the example: %v", err)
+	}
+	cfg, err := policies.DefaultConfig().WithJSON(data)
+	if err != nil {
+		t.Fatalf("the example does not parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the example does not validate: %v", err)
+	}
+
+	if got := cfg.Kinds.Whitelist; len(got) != 3 || got[1] != 37801 || got[2] != 37802 {
+		t.Fatalf("whitelist is %v", got)
+	}
+
+	// the two backup kinds are told apart by their "d" regex, and nothing else
+	for kind, pattern := range map[uint16]string{37801: "^vaultkey$", 37802: "^[0-9]{16}$"} {
+		rule := cfg.EffectiveRule(kind)
+		if rule.TagPatterns["d"] != pattern {
+			t.Fatalf("kind %d tag_patterns[d] is %q, want %q", kind, rule.TagPatterns["d"], pattern)
+		}
+		if rule.MaxSize.Bytes != 4096 || !rule.Read.Privileged || !rule.RequireAuth {
+			t.Fatalf("kind %d does not match its rule: %+v", kind, rule)
+		}
+		// inherited from the reference defaults, and worth knowing about
+		if rule.PTag != "hex" {
+			t.Fatalf("kind %d did not inherit the p rule: %q", kind, rule.PTag)
+		}
+		if rule.MaxExpiration.Duration != 75*time.Hour {
+			t.Fatalf("kind %d did not inherit the 75h expiry cap: %v", kind, rule.MaxExpiration.Duration)
+		}
+	}
+
+	// kind 5 has no rule here, so it keeps the reference rule for deletions
+	deletion := cfg.EffectiveRule(5)
+	if deletion.PTag != "" || !deletion.Shape {
+		t.Fatalf("kind 5 should keep the reference deletion rule: %+v", deletion)
+	}
+
+	// a "d" value that misses the pattern is refused, and one that matches passes
+	relay, _ := wire(t, cfg)
+	write := writePolicy(relay)
+	backup := func(kind int, d string) *nostr.Event {
+		return &nostr.Event{Kind: kind, PubKey: aliceKey, Content: "backup",
+			Tags: nostr.Tags{{"d", d}, {"p", bobKey}, nearExpiration(), {"client", "x"}}}
+	}
+	if reject, _ := write(aliceCtx(), backup(37801, "vaultkey")); reject {
+		t.Fatal("the master backup's own d value must be accepted")
+	}
+	if reject, msg := write(aliceCtx(), backup(37801, "vaultkey2")); !reject || !strings.Contains(msg, "pattern") {
+		t.Fatalf("a d value outside the master pattern must be refused: %v %q", reject, msg)
+	}
+	if reject, _ := write(aliceCtx(), backup(37802, "1234567890123456")); reject {
+		t.Fatal("a 16-digit companion key must be accepted")
+	}
+	if reject, msg := write(aliceCtx(), backup(37802, "12345")); !reject || !strings.Contains(msg, "pattern") {
+		t.Fatalf("a short companion key must be refused: %v %q", reject, msg)
+	}
+}
+
+// The same document with the inherited constraints turned off produces a backup
+// relay that behaves like one: no "p" tag demanded, no expiry demanded, and the
+// "d" tag itself required.
+func TestAppDataExampleWithoutDMInheritance(t *testing.T) {
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
+		"kind": {"whitelist": [5, 37801, 37802]},
+		"p_tag": "",
+		"max_expiration": 0,
+		"required_tags": ["d", "client"],
+		"rules": {
+			"37801": {"description": "Master account backup event", "privileged": true, "size_limit": 4096, "identifier_regex": "^vaultkey$"},
+			"37802": {"description": "Associated account backup event", "privileged": true, "size_limit": 4096, "identifier_regex": "^[0-9]{16}$"}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("failed to validate: %v", err)
+	}
+
+	relay, rules := wire(t, cfg)
+	write := writePolicy(relay)
+
+	// a backup with a d tag, no p tag and no expiration is accepted
+	plain := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup",
+		Tags: nostr.Tags{{"d", "vaultkey"}, {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), plain); reject {
+		t.Fatalf("a backup should not need a p tag or an expiration: %q", msg)
+	}
+
+	// and it stays private to its author: no p tag means author-only, not
+	// recipient-visible
+	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{37801}, Authors: []string{bobKey}}); msg == "" {
+		t.Fatal("a third party could read someone else's backup")
+	}
+	if reject, _ := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{37801}, Authors: []string{aliceKey}}); reject {
+		t.Fatal("the author must read their own backup")
+	}
+
+	// the d tag is now mandatory
+	noD := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup", Tags: nostr.Tags{{"client", "x"}}}
+	if reject, msg := write(aliceCtx(), noD); !reject || !strings.Contains(msg, `"d"`) {
+		t.Fatalf("a backup without a d tag must be refused: %v %q", reject, msg)
+	}
+}
+
+// The verbose AppData example: the two backup kinds carry their own gates, tag
+// budgets and rejection wording. "max_tags: 1" only makes sense once the top
+// level stops demanding "p" and "expiration", which is what this file does.
+func TestAppDataVerboseExampleResolves(t *testing.T) {
+	data, err := os.ReadFile("../examples/bkind/bkind.appdata-verbose.example.json")
+	if err != nil {
+		t.Fatalf("failed to read the example: %v", err)
+	}
+	cfg, err := policies.DefaultConfig().WithJSON(data)
+	if err != nil {
+		t.Fatalf("the example does not parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the example does not validate: %v", err)
+	}
+
+	for kind, tc := range map[uint16]struct {
+		pattern string
+		value   string
+	}{
+		37801: {"^vaultkey$", "vaultkey"},
+		37802: {"^[0-9]{16}$", "1234567890123456"},
+	} {
+		rule := cfg.EffectiveRule(kind)
+		if rule.TagPatterns["d"] != tc.pattern {
+			t.Fatalf("kind %d d pattern is %q", kind, rule.TagPatterns["d"])
+		}
+		if rule.TagLimits.MaxTags != 1 || len(rule.RequiredTags) != 1 || rule.RequiredTags[0] != "d" {
+			t.Fatalf("kind %d tag budget is %+v with required %v", kind, rule.TagLimits, rule.RequiredTags)
+		}
+		if rule.PTag != "" {
+			t.Fatalf("kind %d still demands a p tag: %q", kind, rule.PTag)
+		}
+		if len(rule.RateLimits) != 4 || len(rule.Errors) != 7 {
+			t.Fatalf("kind %d lost its limits or templates: %d/%d", kind, len(rule.RateLimits), len(rule.Errors))
+		}
+	}
+
+	relay, rules := wire(t, cfg)
+	write := writePolicy(relay)
+
+	// a backup is exactly one "d" tag plus content
+	ok := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup", Tags: nostr.Tags{{"d", "vaultkey"}}}
+	if reject, msg := write(aliceCtx(), ok); reject {
+		t.Fatalf("a bare backup event must be accepted: %q", msg)
+	}
+
+	// more than one tag breaks the budget, and the operator's template says so
+	twoTags := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup",
+		Tags: nostr.Tags{{"d", "vaultkey"}, {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), twoTags); !reject || !strings.Contains(msg, "too many tags") {
+		t.Fatalf("a second tag must be refused with {detail}: %v %q", reject, msg)
+	}
+
+	// the value length is theirs: 8 bytes for the master, 16 for the companion
+	longMaster := &nostr.Event{Kind: 37801, PubKey: aliceKey, Content: "backup",
+		Tags: nostr.Tags{{"d", "123456789"}}}
+	if reject, msg := write(aliceCtx(), longMaster); !reject {
+		t.Fatalf("a 9-byte master d value must be refused: %q", msg)
+	}
+	if reject, _ := write(aliceCtx(), &nostr.Event{Kind: 37802, PubKey: aliceKey, Content: "backup",
+		Tags: nostr.Tags{{"d", "1234567890123456"}}}); reject {
+		t.Fatal("a 16-byte companion d value must be accepted")
+	}
+
+	// no p tag means author-only, even though read.privileged is set
+	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{37801}, Authors: []string{bobKey}}); msg == "" {
+		t.Fatal("a third party could read someone else's backup")
+	}
+}
+
+// A tag budget below the number of tags the rule itself demands is a relay that
+// refuses every event, so it is a startup error rather than a surprise.
+func TestTagBudgetMustFitRequiredTags(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "inherited p and expiration against max_tags: 1",
+			json: `{"rules": {"4": {"tag_limits": {"max_tags": 1, "max_tag_name_chars": 1, "max_tag_value_chars": 8}}}}`,
+		},
+		{
+			name: "three required tags against max_tags: 2",
+			json: `{"p_tag": "", "required_tags": ["d", "client", "expiration"],
+			        "rules": {"4": {"tag_limits": {"max_tags": 2, "max_tag_name_chars": 2, "max_tag_value_chars": 8}}}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := policies.DefaultConfig().WithJSON([]byte(tc.json))
+			if err != nil {
+				t.Fatalf("failed to parse: %v", err)
+			}
+			err = cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "no event could be accepted") {
+				t.Fatalf("expected the tag budget contradiction, got %v", err)
+			}
+		})
+	}
+
+	// a budget that fits is fine, which is how the verbose example passes
+	ok := policies.DefaultConfig()
+	ok.Rules["4"].RuleSettings.TagLimits = policies.TagLimits{MaxTags: 3, MaxNameChars: 64, MaxValueChars: 256}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a budget equal to the mandatory tags must be accepted: %v", err)
 	}
 }
 
