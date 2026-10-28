@@ -1712,6 +1712,106 @@ func TestTagBudgetMustFitRequiredTags(t *testing.T) {
 	}
 }
 
+// The files under examples/bkind/invalid are configurations a relay must refuse
+// at startup. Each one is a small, single-fault document, so the test can insist
+// on the reason and not just on the failure — and every file in the directory has
+// to be listed here, so adding a fixture without an expectation fails the build.
+func TestInvalidExamplesFail(t *testing.T) {
+	expectations := map[string]string{
+		"alias-conflict.json":          `both "size_limit" and "max_size"`,
+		"bad-duration.json":            "not an ISO-8601 duration",
+		"bad-regex.json":               "not a valid regular expression",
+		"bad-scope.json":               `scope "npub" must be ip`,
+		"bad-size.json":                "is not a size",
+		"duplicate-kind.json":          "defined twice",
+		"empty-whitelist.json":         "would serve nothing",
+		"ephemeral-kind.json":          "ephemeral",
+		"gate-conflict.json":           "cannot be combined",
+		"missing-shape-validator.json": "no registered shape validator",
+		// a one-tag budget on kind 4, which inherits a mandatory "p",
+		// "expiration" and "client": nothing could ever be published
+		"tag-budget-impossible.json": "no event could be accepted",
+		"unknown-error-key.json":     "not one of",
+		"unknown-field.json":         `unknown field "contnet"`,
+		"unserved-rule.json":         "kinds.whitelist does not include",
+	}
+
+	paths, err := filepath.Glob("../examples/bkind/invalid/*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no invalid examples found")
+	}
+
+	for _, path := range paths {
+		name := filepath.Base(path)
+		reason, ok := expectations[name]
+		if !ok {
+			t.Fatalf("%s has no expected failure: add it to expectations", name)
+		}
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", path, err)
+			}
+			cfg, err := policies.DefaultConfig().WithJSON(data)
+			if err == nil {
+				err = cfg.Validate()
+			}
+			if err == nil {
+				t.Fatalf("%s was accepted, but it must be refused", name)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Fatalf("%s was refused for the wrong reason:\n got %v\nwant something containing %q", name, err, reason)
+			}
+		})
+	}
+}
+
+// strict-incomplete.example.json is the mirror image of the invalid fixtures: it
+// is a perfectly good patch — a single setting — and the only thing that refuses
+// it is strict mode, because a patch is not an explicit configuration.
+func TestStrictModeRefusesAPatch(t *testing.T) {
+	data, err := os.ReadFile("../examples/bkind/strict-incomplete.example.json")
+	if err != nil {
+		t.Fatalf("failed to read the example: %v", err)
+	}
+
+	// lenient: accepted, and it means what it says
+	cfg, err := policies.DefaultConfig().WithJSON(data)
+	if err != nil {
+		t.Fatalf("the example must be accepted in lenient mode: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the example must validate in lenient mode: %v", err)
+	}
+	if cfg.MaxSize.Bytes != 512 {
+		t.Fatalf("the patch did not apply: max_size is %d", cfg.MaxSize.Bytes)
+	}
+
+	// strict: refused, and the error names the first missing top-level field
+	var strict policies.Config
+	if _, err := strict.WithStrictJSON(data); err == nil {
+		t.Fatal("strict mode accepted a patch")
+	} else if !strings.Contains(err.Error(), "incomplete configuration") || !strings.Contains(err.Error(), "print-config") {
+		t.Fatalf("the strict error does not explain itself: %v", err)
+	}
+
+	// freezing the resolved document is the way in: it is accepted as-is
+	frozen, err := cfg.JSON()
+	if err != nil {
+		t.Fatalf("failed to render: %v", err)
+	}
+	var reparsed policies.Config
+	if reparsed, err = reparsed.WithStrictJSON(frozen); err != nil {
+		t.Fatalf("the frozen document must be accepted in strict mode: %v", err)
+	}
+	if err := reparsed.Validate(); err != nil {
+		t.Fatalf("the frozen document does not validate: %v", err)
+	}
+}
+
 func TestExampleConfigFileMatchesDefaults(t *testing.T) {
 	data, err := os.ReadFile("../examples/bkind/bkind.example.json")
 	if err != nil {

@@ -58,6 +58,40 @@ renders every one of them:
 | `bkind.appdata.example.json` | addressable backup kinds (5, 37801, 37802) told apart by a `d` pattern |
 | `bkind.appdata-verbose.example.json` | the same, in full, with a one-tag budget per kind |
 
+`examples/bkind/invalid/` holds documents a relay must **refuse** at startup, one
+fault each, so every failure message can be tried by hand:
+
+| File | Fault |
+|---|---|
+| `unknown-field.json` | a misspelled section (`contnet`) |
+| `bad-size.json` | `max_size: "4KK"` |
+| `bad-duration.json` | `max_expiration: "P3W"` (weeks are not a span a relay can act on) |
+| `bad-regex.json` | `tag_patterns.d: "["` |
+| `alias-conflict.json` | `size_limit` and `max_size` in one rule |
+| `unserved-rule.json` | a rule for kind 7 when the whitelist is `[4]` |
+| `ephemeral-kind.json` | kind 20001 whitelisted without `allow_ephemeral` |
+| `missing-shape-validator.json` | `shape: true` on 1059, which has none |
+| `duplicate-kind.json` | kind 4 at the top level *and* under `rules` |
+| `bad-scope.json` | a `connection_limits` entry keyed by `npub` |
+| `unknown-error-key.json` | an `errors` key that is not a rejection |
+| `gate-conflict.json` | `read.allow: ["*", <pubkey>]` |
+| `empty-whitelist.json` | a relay that would serve nothing |
+| `tag-budget-impossible.json` | `max_tags: 1` while `p`, `expiration` and `client` are mandatory |
+
+```sh
+BKIND_CONFIG=examples/bkind/invalid/tag-budget-impossible.json bkind -print-config
+# invalid configuration: rules[4] resolved over the defaults: tag_limits.max_tags
+#   is 1 but "expiration", "client" and "p" must be present, so no event could be accepted
+```
+
+`TestInvalidExamplesFail` runs every file there, insists on the reason rather
+than just the failure, and fails if a fixture has no expectation listed.
+
+`examples/bkind/strict-incomplete.example.json` is the mirror image: one setting,
+perfectly valid as a patch, refused only because strict mode wants an explicit
+configuration. `TestStrictModeRefusesAPatch` covers both directions, including
+freezing the resolved document and feeding that back.
+
 ## Precedence
 
 Each layer overrides the one before it:

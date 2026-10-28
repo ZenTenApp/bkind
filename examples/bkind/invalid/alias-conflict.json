@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "4": {
+      "size_limit": 1,
+      "max_size": 2
+    }
+  }
+}
