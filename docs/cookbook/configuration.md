@@ -71,6 +71,7 @@ rendered by a test:
 | `bkind.dm-verbose.example.json` | the same kinds spelled in full, with their own write limits and rejection wording |
 | `bkind.appdata.example.json` | addressable backup kinds (5, 37801, 37802) told apart by a `d` pattern |
 | `bkind.appdata-verbose.example.json` | the same, in full, with a one-tag budget per kind |
+| `bkind.minimal.example.json` | the smallest document that validates: a whitelist and the four NIP-11 ceilings, everything else taken from the embedded document |
 
 `examples/bkind/invalid/` holds documents a relay must **refuse** at startup, one
 fault each, so every failure message can be tried by hand:
