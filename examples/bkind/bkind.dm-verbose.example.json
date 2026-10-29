@@ -33,7 +33,7 @@
       "errors": {
         "auth_required": "auth-required: authentication required to publish this kind",
         "expiration": "blocked: expiration is further out than max_expiration",
-        "max_size": "blocked: event exceeds size limit ({size} > {limit})",
+        "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
         "missing_tag": "invalid: missing required tag: {tag}",
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",
@@ -69,7 +69,7 @@
       "errors": {
         "auth_required": "auth-required: authentication required to publish this kind",
         "expiration": "blocked: expiration is further out than max_expiration",
-        "max_size": "blocked: event exceeds size limit ({size} > {limit})",
+        "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
         "missing_tag": "invalid: missing required tag: {tag}",
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",

@@ -306,7 +306,7 @@ are stable; the built-in wording may change between versions, the keys do not.
 | `p_tag` | a `p` tag that is not one valid pubkey ≠ author | — |
 | `tag_pattern` | a tag value that misses its pattern | `{tag}`, `{pattern}`, `{value}` |
 | `max_event_size` | an event whose serialized form is too long | `{size}`, `{limit}` |
-| `max_size` | oversized content | `{size}`, `{limit}` |
+| `max_event_content_size` | oversized content | `{size}`, `{limit}` |
 | `tag_limits` | too many tags, or a name/value too long | — |
 | `rate_limited` | the write limits of the kind | — |
 | `shape` | the structural validator | — |
@@ -320,7 +320,7 @@ with the operator's wording.
 ```json
 "errors": {
   "max_event_size": "blocked: event exceeds size limit ({size} > {limit})",
-  "max_size": "blocked: content exceeds size limit ({size} > {limit})",
+  "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
   "missing_tag": "invalid: missing required tag: {tag}"
 }
 ```

@@ -765,8 +765,8 @@ func TestTagPatterns(t *testing.T) {
 func TestErrorTemplates(t *testing.T) {
 	cfg := policies.DefaultConfig()
 	cfg.Rules["4"].Errors = map[string]string{
-		"max_size":    "blocked: event exceeds size limit ({size} > {limit})",
-		"missing_tag": "invalid: missing required tag: {tag}",
+		"max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
+		"missing_tag":            "invalid: missing required tag: {tag}",
 	}
 
 	relay, _ := wire(t, cfg)
@@ -774,8 +774,8 @@ func TestErrorTemplates(t *testing.T) {
 
 	big := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 4097),
 		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
-	if reject, msg := write(aliceCtx(), big); !reject || msg != "blocked: event exceeds size limit (4097 > 4096)" {
-		t.Fatalf("the custom max_size message was not rendered: %v %q", reject, msg)
+	if reject, msg := write(aliceCtx(), big); !reject || msg != "blocked: content exceeds size limit (4097 > 4096)" {
+		t.Fatalf("the custom max_event_content_size message was not rendered: %v %q", reject, msg)
 	}
 
 	missing := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
@@ -1168,8 +1168,8 @@ func TestDMVerboseExampleResolves(t *testing.T) {
 	// the operator's wording reaches the client, placeholders filled
 	dm := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: strings.Repeat("x", 4097),
 		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}}}
-	if reject, msg := write(aliceCtx(), dm); !reject || msg != "blocked: event exceeds size limit (4097 > 4096)" {
-		t.Fatalf("the max_size template did not apply: %v %q", reject, msg)
+	if reject, msg := write(aliceCtx(), dm); !reject || msg != "blocked: content exceeds size limit (4097 > 4096)" {
+		t.Fatalf("the max_event_content_size template did not apply: %v %q", reject, msg)
 	}
 
 	// the tag limit is theirs (32), not the default's (16)
@@ -1243,7 +1243,7 @@ func TestEventSizeAndContentSizeAreSeparate(t *testing.T) {
 
 // the templates the verbose example defines
 var errorTemplateKeysForTest = []string{
-	"auth_required", "max_size", "missing_tag", "p_tag", "expiration", "rate_limited", "tag_limits",
+	"auth_required", "max_event_content_size", "missing_tag", "p_tag", "expiration", "rate_limited", "tag_limits",
 }
 
 // The AppData example: addressable backup kinds, told apart by a "d" tag

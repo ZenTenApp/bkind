@@ -105,19 +105,19 @@ type RateLimit struct {
 // keys are stable API: a client can rely on the default wording changing
 // between versions, but not on which rejections exist.
 var errorMessageKeys = map[string]bool{
-	"write_denied":   true,
-	"auth_required":  true,
-	"too_old":        true,
-	"in_future":      true,
-	"expiration":     true,
-	"missing_tag":    true,
-	"p_tag":          true,
-	"tag_pattern":    true,
-	"max_event_size": true,
-	"max_size":       true,
-	"tag_limits":     true,
-	"rate_limited":   true,
-	"shape":          true,
+	"write_denied":           true,
+	"auth_required":          true,
+	"too_old":                true,
+	"in_future":              true,
+	"expiration":             true,
+	"missing_tag":            true,
+	"p_tag":                  true,
+	"tag_pattern":            true,
+	"max_event_size":         true,
+	"max_event_content_size": true,
+	"tag_limits":             true,
+	"rate_limited":           true,
+	"shape":                  true,
 }
 
 // render fills the {placeholders} of a custom rejection message: "blocked: event
@@ -387,7 +387,7 @@ func (r *KindRule) contentSizeCheck() eventCheck {
 	}
 	limit := r.MaxEventContentSize.Bytes
 	inner := MaxContentLen(limit)
-	return r.withTemplate("max_size", inner, func(evt *nostr.Event) map[string]string {
+	return r.withTemplate("max_event_content_size", inner, func(evt *nostr.Event) map[string]string {
 		return map[string]string{
 			"size":  strconv.Itoa(len(evt.Content)),
 			"limit": strconv.Itoa(limit),
