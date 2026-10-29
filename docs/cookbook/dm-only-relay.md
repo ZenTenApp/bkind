@@ -19,7 +19,7 @@ Status: implemented on branch `complex/bkind`.
 
 | Requirement | Rule |
 |---|---|
-| Kinds | `{4, 5, 62}` only, no ephemeral (`kinds.whitelist` in the config) |
+| Kinds | `{4, 5, 62}` only, no ephemeral (the document's keys) |
 | Payload size | `len(content) <= 4096` bytes |
 | Frame backstop | `MaxMessageSize ~= 12KB` (websocket read limit, not a check) |
 | Expiration | mandatory, exactly one tag, `now < expiration <= now + 75h` |
@@ -42,7 +42,7 @@ is **not** used (its 2-per-3-minutes event limit contradicts our numbers).
 1. **Content is capped at 4096 bytes**, not the serialized event, which has its own
    `max_event_size` budget. Tags and JSON overhead live inside the websocket frame
    limit as well.
-2. **Kinds `{4, 5, 62}`.** The set is `kinds.whitelist` in
+2. **Kinds `{4, 5, 62}`.** The set is the document's keys in
    `policies/default.json`, not a literal in the wiring, and the write gate, the filter
    rewrite, reads, `COUNT`, live delivery and NIP-11 all derive from it — see
    [Configuring a relay](./configuration.md). Kind 5 lets a sender delete their own DM. Kind 62 is
@@ -233,13 +233,13 @@ if err := cfg.Wire(relay); err != nil { ... }
 `RejectEvent`:
 
 ```go
-k.RestrictKind(),            // the whitelist
+k.RestrictKind(),            // the document's kinds
 c.writePolicy(),             // the checks of the event's own effective rule —
 // the kind's own rule, in this order:
 //   write.allow, require_auth, max_age_of_event, max_age_event_in_future,
 //   max_expiration + required_tags, tag_patterns, max_event_size,
 //   max_event_content_size, tag_limits,
-//   p_tag, the kind's structural validator, the kind's write rate limits
+//   the kind's structural validator, the kind's write rate limits
 ```
 
 `OverwriteFilter` is `k.OverwriteFilters()`; `RejectFilter` is `k.ReadFilter` (which

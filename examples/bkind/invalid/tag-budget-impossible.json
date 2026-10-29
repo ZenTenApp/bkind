@@ -1,17 +1,18 @@
 {
-  "rules": {
-    "4": {
-      "p_tag": "hex",
-      "required_tags": [
-        "expiration",
-        "client"
-      ],
-      "tag_limits": {
-        "max_tags": 2,
-        "max_tag_name_chars": 8,
-        "max_tag_value_chars": 64
-      },
-      "description": "a rule whose tag budget cannot be met"
+  "4": {
+    "description": "a rule whose tag budget cannot be met",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "p": "[0-9a-f]{64}"
+    },
+    "tag_limits": {
+      "max_tags": 2,
+      "max_tag_name_chars": 8,
+      "max_tag_value_chars": 64
     }
   }
 }

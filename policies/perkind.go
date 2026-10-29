@@ -111,7 +111,6 @@ var errorMessageKeys = map[string]bool{
 	"in_future":              true,
 	"expiration":             true,
 	"missing_tag":            true,
-	"p_tag":                  true,
 	"tag_pattern":            true,
 	"max_event_size":         true,
 	"max_event_content_size": true,
@@ -283,35 +282,6 @@ func (r *KindRule) requiredTagChecks() (out []eventCheck) {
 	return out
 }
 
-// pTagCheck enforces the "p" tag of a direct-message kind: exactly one, a valid
-// pubkey, and not the author. It is what makes a privileged kind
-// recipient-visible.
-func (r *KindRule) pTagCheck() eventCheck {
-	if r.PTag != "hex" {
-		return nil
-	}
-	inner := func(_ context.Context, evt *nostr.Event) (bool, string) {
-		count := 0
-		for _, tag := range evt.Tags {
-			if len(tag) == 0 || tag[0] != "p" {
-				continue
-			}
-			count++
-			if len(tag) < 2 || !nostr.IsValidPublicKey(tag[1]) {
-				return true, `invalid: "p" tag must be a 64-character hex pubkey`
-			}
-			if tag[1] == evt.PubKey {
-				return true, `invalid: events of this kind cannot be addressed to their own author`
-			}
-		}
-		if count != 1 {
-			return true, `invalid: events of this kind must have exactly one "p" tag`
-		}
-		return false, ""
-	}
-	return r.withTemplate("p_tag", inner, func(*nostr.Event) map[string]string { return nil })
-}
-
 // tagPatternCheck enforces the per-tag regular expressions: a "d" pattern of
 // "^[0-9]{16}$" means every "d" tag value must match. Whether the tag must be
 // present at all is required_tags' job; a pattern only bounds the values.
@@ -464,9 +434,6 @@ func (r *KindRule) checks(kind uint16) []eventCheck {
 		out = append(out, check)
 	}
 	if check := r.tagLimitsCheck(); check != nil {
-		out = append(out, check)
-	}
-	if check := r.pTagCheck(); check != nil {
 		out = append(out, check)
 	}
 	if check := r.shapeCheck(kind); check != nil {

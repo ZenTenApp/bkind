@@ -92,7 +92,7 @@ func main() {
 
 	go func() {
 		log.Printf("listening on %s, serving %s (kinds %s, %s)",
-			cfg.addr, cfg.serviceURL, kindList(cfg.policies.Kinds.Whitelist), retention)
+			cfg.addr, cfg.serviceURL, kindList(cfg.policies.KindNumbers()), retention)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server failed: %v", err)
 		}
@@ -123,9 +123,9 @@ func parseConfig() config {
 	serviceURL := envOr("BKIND_URL", "")
 	dbPath := envOr("BKIND_DB", "")
 	sweepInterval := envOr("BKIND_SWEEP_INTERVAL", defaultSweepInterval.String())
-	kinds := strings.Join(kindListInts(policySet.Kinds.Whitelist), ",")
-	nip11Name := policySet.NIP11.Name
-	nip11Description := policySet.NIP11.Description
+	kinds := strings.Join(kindListInts(policySet.KindNumbers()), ",")
+	nip11Name := policySet.Settings.NIP11.Name
+	nip11Description := policySet.Settings.NIP11.Description
 	printConfig := false
 
 	flag.StringVar(&addr, "addr", addr, "address to listen on")
@@ -156,8 +156,8 @@ func parseConfig() config {
 		log.Fatalf("invalid -kinds: %v", err)
 	}
 	cfg.policies.SetKinds(parsedKinds)
-	cfg.policies.NIP11.Name = nip11Name
-	cfg.policies.NIP11.Description = nip11Description
+	cfg.policies.Settings.NIP11.Name = nip11Name
+	cfg.policies.Settings.NIP11.Description = nip11Description
 
 	// re-validate: a flag can break an invariant the environment respected
 	if err := cfg.policies.Validate(); err != nil {
@@ -176,11 +176,11 @@ func newRelay(cfg config) (*bkind.Relay, func(), error) {
 	// same field: the limits on a message are the per-kind policies
 	// (policies.MaxContentLen and policies.MaxEventLen), which NAK instead of
 	// closing the connection
-	relay.MaxMessageSize = int64(cfg.policies.NIP11.MaxMessageLength)
+	relay.MaxMessageSize = int64(cfg.policies.Settings.NIP11.MaxMessageLength)
 	relay.SetExpirationInterval(cfg.sweepInterval)
 
 	closer := func() {}
-	store, err := openStore(cfg.dbPath, cfg.policies.NIP11.MaxLimit)
+	store, err := openStore(cfg.dbPath, cfg.policies.Settings.NIP11.MaxLimit)
 	if err != nil {
 		return nil, nil, err
 	}

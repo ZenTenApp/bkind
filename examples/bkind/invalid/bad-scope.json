@@ -1,9 +1,0 @@
-{
-  "connection_limits": [
-    {
-      "scope": "npub",
-      "limit": 10,
-      "window": "1h"
-    }
-  ]
-}

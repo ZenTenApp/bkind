@@ -25,7 +25,7 @@ in [`examples/bkind/main.go`](./examples/bkind/main.go).
 
 | Requirement | Rule | Where it lives |
 |---|---|---|
-| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is `kinds.whitelist` in the config, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `kinds.whitelist` |
+| **Only Kind 4** | Kind 4 only, plus the two utility kinds needed to operate it: Kind 5 (NIP-09 delete) and Kind 62 (NIP-62 vanish request). No ephemeral kinds, no social kinds. The set is the key list of the config document, not a literal, and one value drives the write gate, the filter rewrite, reads, `COUNT`, live delivery and NIP-11. | `policies/default.json` |
 | **Privileged** | A Kind 4 is readable only by its author and its `p` recipient: every filter must pin `authors` or `#p` to the authenticated pubkey. Kind 5 and 62 are readable by their author only. The same check runs on live delivery, so a wide subscription cannot leak events after its `REQ` was rejected. `COUNT` is refused for the same reason. | `read.privileged` per kind, derived into `KindRules.ReadFilter`, `KindRules.PreventBroadcast`, `KindRules.RejectCount` (the `DM*` functions are wrappers over the default kind set) |
 | **Mandatory expiration, max 75h** | Exactly one `expiration` tag, a unix timestamp, in the future and no further than 75 hours away. Expired events are filtered out of queries even before the background sweep deletes them. | `required_tags: ["expiration", …]` + `max_expiration: "75h"` per kind |
 | **Max content 4 KB, event 64 KB** | `len(content) <= 4096` bytes, and the serialized event at most 64 KB. The content limit is on the payload, not the serialized event; the 12 KB websocket frame limit is only a backstop. | `max_event_content_size` and `max_event_size` per kind (`MaxContentLen` and `MaxEventLen` under them) |
@@ -150,11 +150,12 @@ BKIND_CONFIG=bkind.json go run ./examples/bkind
 | `BKIND_NAME` | `-name` | `B Kind` | relay name in NIP-11 |
 | `BKIND_DESCRIPTION` | `-description` | *(derived)* | description in NIP-11; empty derives it from the kind list |
 
-Per-kind limits, tag rules, gates, write rate limits, read and connection
-limits, error templates — all of it is structured, so it lives in the JSON file
-(or `BKIND_CONFIG_JSON`); every field is documented in
+Per-kind limits, tag rules, gates, write rate limits and error templates live in
+the JSON document (or `BKIND_CONFIG_JSON`), keyed by kind; the relay-wide
+settings — read and connection limits, filters, `COUNT`, NIP-11 — are defaults in
+`policies.DefaultSettings()`, moved by flags. Every field is documented in
 [Configuring a relay](./docs/cookbook/configuration.md), and
-`bkind -print-config` prints the whole resolved document.
+`bkind -print-config` prints the resolved document (the kinds, in full).
 
 The NIP-11 document it serves:
 
@@ -177,8 +178,8 @@ The NIP-11 document it serves:
 ```
 
 The document is derived from the config: `supported_nips` gains `45` only when
-`count.reject` is `false`, and the description is generated from the
-whitelist, so neither can claim a feature this relay does not have.
+`COUNT` is answered, and the description is generated from the served kinds, so
+neither can claim a feature this relay does not have.
 `max_event_tags` and `max_content_length` are the maxima across the kind rules.
 
 ## Documentation

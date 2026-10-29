@@ -13,17 +13,20 @@ import (
 )
 
 // KindRules derives the gate set every read path answers from. A kind's own rule
-// decides its visibility class: privileged with a "hex" p rule is
-// recipient-visible (author and "p"), privileged without one is author-only,
-// unprivileged is public within the reader list. A kind the document gave no rule
+// decides its visibility class, and the whole rule is the input: privileged and
+// demanding a "p" tag is recipient-visible (author and the p tag), privileged
+// without one is author-only, unprivileged is public within the reader list. The
+// "p" tag is what addresses an event, so requiring it is what makes a recipient
+// exist; there is no separate switch for that. A kind the document gave no rule
 // reads as the empty rule: nobody in the reader list, so nobody may query it.
 func (c Config) KindRules() KindRules {
-	access := make(map[uint16]kindAccess, len(c.Kinds.Whitelist))
-	for _, kind := range c.Kinds.Whitelist {
+	served := c.KindNumbers()
+	access := make(map[uint16]kindAccess, len(served))
+	for _, kind := range served {
 		rule := c.Rule(kind)
 		acc := kindAccess{visibility: visibilityPublic}
 		switch {
-		case rule.Read.Privileged && rule.PTag == "hex":
+		case rule.Read.Privileged && slices.Contains(rule.RequiredTags, "p"):
 			acc.visibility = visibilityRecipient
 		case rule.Read.Privileged:
 			acc.visibility = visibilityAuthorOnly
@@ -38,21 +41,21 @@ func (c Config) KindRules() KindRules {
 		}
 		access[kind] = acc
 	}
-	return newKindRules(c.Kinds.Whitelist, c.Kinds.AllowEphemeral, c.Kinds.RejectUnservedFilters, access)
+	return newKindRules(served, c.Settings.RejectUnservedFilters, access)
 }
 
 // writePolicy is the per-kind write gate: the checks of the event's own rule, in
 // the order a client can act on.
 func (c Config) writePolicy() func(context.Context, *nostr.Event) (bool, string) {
-	byKind := make(map[uint16][]eventCheck, len(c.Kinds.Whitelist))
-	for _, kind := range c.Kinds.Whitelist {
+	served := c.KindNumbers()
+	byKind := make(map[uint16][]eventCheck, len(served))
+	for _, kind := range served {
 		byKind[kind] = c.Rule(kind).checks(kind)
 	}
 
 	return func(ctx context.Context, evt *nostr.Event) (bool, string) {
-		// RestrictKind has already rejected unserved kinds, so a miss here is an
-		// ephemeral kind admitted by allow_ephemeral: it runs the empty rule, which
-		// lets nobody publish it
+		// RestrictKind has already rejected unserved kinds, so a miss here is a kind
+		// without a rule: nothing is checked and nothing is stored for it
 		checks, ok := byKind[uint16(evt.Kind)]
 		if !ok {
 			return false, ""
@@ -80,7 +83,7 @@ func (c Config) Wire(relay *bkind.Relay) error {
 
 	k := c.KindRules()
 
-	relay.Negentropy = c.Negentropy
+	relay.Negentropy = c.Settings.Negentropy
 
 	// ---------------------------------------------------------------- writes
 	relay.RejectEvent = append(relay.RejectEvent,
@@ -93,13 +96,13 @@ func (c Config) Wire(relay *bkind.Relay) error {
 
 	readPolicies := make([]func(context.Context, nostr.Filter) (bool, string), 0, 4)
 	readPolicies = append(readPolicies, k.ReadFilter)
-	if c.Filters.RejectEmpty {
+	if c.Settings.Filters.RejectEmpty {
 		readPolicies = append(readPolicies, NoEmptyFilters)
 	}
-	if c.Filters.RejectSearch {
+	if c.Settings.Filters.RejectSearch {
 		readPolicies = append(readPolicies, NoSearchQueries)
 	}
-	for _, rl := range c.ReadLimits {
+	for _, rl := range c.Settings.ReadLimits {
 		switch rl.Scope {
 		case "npub":
 			readPolicies = append(readPolicies, FilterAuthedPubKeyRateLimiter(rl.Limit, rl.Window.Duration, rl.Limit))
@@ -109,7 +112,7 @@ func (c Config) Wire(relay *bkind.Relay) error {
 	}
 	relay.RejectFilter = append(relay.RejectFilter, readPolicies...)
 
-	if c.Count.Reject {
+	if c.Settings.Count.Reject {
 		relay.RejectCountFilter = append(relay.RejectCountFilter, k.ReadFilter)
 	}
 
@@ -117,7 +120,7 @@ func (c Config) Wire(relay *bkind.Relay) error {
 	relay.PreventBroadcast = append(relay.PreventBroadcast, k.PreventBroadcast)
 
 	var rejectConnection []func(*http.Request) bool
-	for _, rl := range c.ConnectionLimits {
+	for _, rl := range c.Settings.ConnectionLimits {
 		rejectConnection = append(rejectConnection, ConnectionRateLimiter(rl.Limit, rl.Window.Duration, rl.Limit))
 	}
 	relay.RejectConnection = append(relay.RejectConnection, rejectConnection...)
@@ -128,8 +131,8 @@ func (c Config) Wire(relay *bkind.Relay) error {
 
 // applyNIP11 derives the information document from the configuration.
 func (c Config) applyNIP11(relay *bkind.Relay, k KindRules) error {
-	relay.Info.Name = c.NIP11.Name
-	relay.Info.Description = c.NIP11.Description
+	relay.Info.Name = c.Settings.NIP11.Name
+	relay.Info.Description = c.Settings.NIP11.Description
 	if relay.Info.Description == "" {
 		relay.Info.Description = c.defaultDescription(k)
 	}
@@ -167,13 +170,13 @@ func (c Config) applyNIP11(relay *bkind.Relay, k KindRules) error {
 	if anyAuth {
 		nips[42] = true
 	}
-	if !c.Count.Reject {
+	if !c.Settings.Count.Reject {
 		nips[45] = true
 	}
-	if c.Negentropy {
+	if c.Settings.Negentropy {
 		nips[77] = true
 	}
-	for _, nip := range c.NIP11.ExtraNIPs {
+	for _, nip := range c.Settings.NIP11.ExtraNIPs {
 		nips[nip] = true
 	}
 
@@ -197,12 +200,12 @@ func (c Config) applyNIP11(relay *bkind.Relay, k KindRules) error {
 		})
 
 	relay.Info.Limitation = &nip11.RelayLimitationDocument{
-		MaxMessageLength: c.NIP11.MaxMessageLength,
+		MaxMessageLength: c.Settings.NIP11.MaxMessageLength,
 		MaxEventTags:     maxTags,
 		MaxContentLength: maxContent,
-		MaxSubscriptions: c.NIP11.MaxSubscriptions,
-		MaxFilters:       c.NIP11.MaxFilters,
-		MaxLimit:         c.NIP11.MaxLimit,
+		MaxSubscriptions: c.Settings.NIP11.MaxSubscriptions,
+		MaxFilters:       c.Settings.NIP11.MaxFilters,
+		MaxLimit:         c.Settings.NIP11.MaxLimit,
 		AuthRequired:     anyAuth,
 		RestrictedWrites: anyAuth,
 	}

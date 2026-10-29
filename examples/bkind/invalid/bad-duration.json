@@ -1,7 +1,6 @@
 {
-  "rules": {
-    "4": {
-      "max_expiration": "P3W"
-    }
+  "4": {
+    "description": "a kind whose expiry cap is not a duration",
+    "max_expiration": "P3W"
   }
 }

@@ -1,4 +1,5 @@
 {
-  "kinds": {"whitelist": [4]},
-  "nip11": {"max_message_length": 12288, "max_subscriptions": 10, "max_filters": 4, "max_limit": 100}
+  "4": {
+    "description": "NIP-04 direct messages"
+  }
 }

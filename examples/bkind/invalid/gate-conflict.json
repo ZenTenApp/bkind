@@ -1,13 +1,11 @@
 {
-  "rules": {
-    "4": {
-      "read": {
-        "allow": [
-          "*",
-          "0000000000000000000000000000000000000000000000000000000000000001"
-        ]
-      },
-      "description": "a rule whose allow list cannot be met"
+  "4": {
+    "description": "a rule whose allow list cannot be met",
+    "read": {
+      "allow": [
+        "*",
+        "0000000000000000000000000000000000000000000000000000000000000001"
+      ]
     }
   }
 }

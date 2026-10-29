@@ -37,14 +37,13 @@ type kindAccess struct {
 // policy, the COUNT policy, live delivery and the NIP-11 document — is derived
 // from one KindRules value, so they cannot disagree.
 //
-// The value is built from the per-kind rules by Config.KindRules. A kind without
-// an access entry (an ephemeral kind admitted by allow_ephemeral) gets the
-// strictest access: readable by its author only, after authentication.
+// The value is built from the per-kind rules by Config.KindRules: the document's
+// keys are the served set, so there is no second list to keep in step. A kind
+// without an access entry (which the builder never makes) gets the strictest
+// access: readable by its author only, after authentication.
 type KindRules struct {
 	// Allowed is the complete set of kinds the relay accepts and serves.
 	Allowed []uint16
-	// AllowEphemeral lets every ephemeral kind through without listing it.
-	AllowEphemeral bool
 	// RejectUnservedFilters makes a REQ naming a kind outside Allowed fail with
 	// "restricted: kind N is not served by this relay" instead of being silently
 	// narrowed to the served kinds. A filter that lists no kinds at all is still
@@ -58,29 +57,25 @@ type KindRules struct {
 // newKindRules builds the gate set from the allowlist and the per-kind access
 // rules. Kinds without an access entry (which must not happen for kinds in
 // Allowed when built by Config.kindRules) read as the strictest class.
-func newKindRules(allowed []uint16, allowEphemeral, rejectUnserved bool, access map[uint16]kindAccess) KindRules {
+func newKindRules(allowed []uint16, rejectUnserved bool, access map[uint16]kindAccess) KindRules {
 	return KindRules{
 		Allowed:               allowed,
-		AllowEphemeral:        allowEphemeral,
 		RejectUnservedFilters: rejectUnserved,
 		access:                access,
 	}
 }
 
-// Validate checks the invariants the gate set itself can break: an empty
-// allowlist would serve nothing, and an ephemeral kind listed without
-// allow_ephemeral would be accepted by the filter policy and rejected on write.
+// Validate checks the invariants the gate set itself can break: an empty kind set
+// would serve nothing, and kind 0 is not a kind to serve. Ephemeral kinds need no
+// special permission: a rule for one is the permission.
 func (k KindRules) Validate() error {
 	if len(k.Allowed) == 0 {
-		return fmt.Errorf("kinds.whitelist is empty: the relay would serve nothing")
+		return fmt.Errorf("the document is empty: the relay would serve nothing")
 	}
 
 	for _, kind := range k.Allowed {
 		if kind == 0 {
-			return fmt.Errorf("kinds.whitelist contains kind 0, which is not a valid kind to serve")
-		}
-		if nostr.IsEphemeralKind(int(kind)) && !k.AllowEphemeral {
-			return fmt.Errorf("kinds.whitelist contains the ephemeral kind %d but kinds.allow_ephemeral is false: it would be accepted by the filter policy and rejected on write", kind)
+			return fmt.Errorf("the document has kind 0, which is not a valid kind to serve")
 		}
 	}
 
@@ -117,12 +112,12 @@ func (k KindRules) List() string {
 	}
 }
 
-// RestrictKind is the write gate: anything outside Allowed, and any ephemeral
-// kind unless AllowEphemeral, is rejected.
+// RestrictKind is the write gate: anything outside Allowed is rejected, ephemeral
+// kinds included — a kind is served exactly when the document has a rule for it.
 func (k KindRules) RestrictKind() func(context.Context, *nostr.Event) (bool, string) {
 	// the allowlist is sorted in place by the policy, so hand it a copy: Allowed is
 	// also what OverwriteFilters and the NIP-11 document read
-	return RestrictToSpecifiedKinds(k.AllowEphemeral, append([]uint16(nil), k.Allowed...)...)
+	return RestrictToSpecifiedKinds(false, append([]uint16(nil), k.Allowed...)...)
 }
 
 // OverwriteFilters bounds an incoming filter to the served kinds. It runs before the
@@ -164,9 +159,8 @@ func (k KindRules) OverwriteFilters() func(context.Context, *nostr.Filter) {
 }
 
 // accessFor returns the read rules of a served kind. Config.KindRules fills an
-// entry for every kind in Allowed, so a miss here means the kind was admitted by
-// allow_ephemeral: it reads as the strictest class, since no rule was written for
-// it.
+// entry for every kind in Allowed, so a miss here means no rule was written for
+// the kind: it reads as the strictest class.
 func (k KindRules) accessFor(kind uint16) kindAccess {
 	if acc, ok := k.access[kind]; ok {
 		return acc

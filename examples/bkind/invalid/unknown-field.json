@@ -1,5 +1,6 @@
 {
-  "contnet": {
-    "max": 1
+  "4": {
+    "description": "a rule with a misspelled setting",
+    "contnet": "x"
   }
 }

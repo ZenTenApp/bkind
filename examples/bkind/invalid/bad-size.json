@@ -1,7 +1,6 @@
 {
-  "rules": {
-    "4": {
-      "max_event_size": "4KK"
-    }
+  "4": {
+    "description": "a kind whose size limit is not a size",
+    "max_event_size": "4KK"
   }
 }

@@ -1,100 +1,128 @@
 {
-  "kinds": {
-    "whitelist": [4, 1059],
-    "allow_ephemeral": false,
-    "reject_unserved_filters": true
-  },
-  "rules": {
-    "1059": {
-      "description": "Private Direct Messages: privileged, expiring, authenticated, rate-limited",
-      "write": {
-        "allow": ["*"]
-      },
-      "read": {
-        "allow": ["*"],
-        "privileged": true
-      },
-      "require_auth": true,
-      "max_event_size": 65536,
-      "max_event_content_size": 4096,
-      "max_expiration": "75h",
-      "max_age_of_event": "0s",
-      "max_age_event_in_future": "0s",
-      "p_tag": "hex",
-      "required_tags": ["expiration", "client"],
-      "tag_patterns": {},
-      "tag_limits": {"max_tags": 32, "max_tag_name_chars": 32, "max_tag_value_chars": 128},
-      "rate_limits": [
-        {"scope": "npub", "limit": 100, "window": "1h"},
-        {"scope": "npub", "limit": 1000, "window": "1d"},
-        {"scope": "ip", "limit": 300, "window": "1h"},
-        {"scope": "ip", "limit": 2500, "window": "1d"}
-      ],
-      "errors": {
-        "auth_required": "auth-required: authentication required to publish this kind",
-        "expiration": "blocked: expiration is further out than max_expiration",
-        "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
-        "missing_tag": "invalid: missing required tag: {tag}",
-        "p_tag": "invalid: p tag requirement not met",
-        "rate_limited": "rate-limited: rate limit exceeded for this kind",
-        "tag_limits": "invalid: {detail}"
-      }
+  "4": {
+    "description": "Private kind-4 DMs: privileged, expiring, authenticated, rate-limited",
+    "write": {
+      "allow": [
+        "*"
+      ]
     },
-    "4": {
-      "description": "Private kind-4 DMs: privileged, expiring, authenticated, rate-limited",
-      "write": {
-        "allow": ["*"]
-      },
-      "read": {
-        "allow": ["*"],
-        "privileged": true
-      },
-      "require_auth": true,
-      "max_event_size": 65536,
-      "max_event_content_size": 4096,
-      "max_expiration": "75h",
-      "max_age_of_event": "0s",
-      "max_age_event_in_future": "0s",
-      "p_tag": "hex",
-      "required_tags": ["expiration", "client"],
-      "tag_patterns": {},
-      "tag_limits": {"max_tags": 32, "max_tag_name_chars": 32, "max_tag_value_chars": 128},
-      "rate_limits": [
-        {"scope": "npub", "limit": 100, "window": "1h"},
-        {"scope": "npub", "limit": 1000, "window": "1d"},
-        {"scope": "ip", "limit": 300, "window": "1h"},
-        {"scope": "ip", "limit": 2500, "window": "1d"}
+    "read": {
+      "allow": [
+        "*"
       ],
-      "errors": {
-        "auth_required": "auth-required: authentication required to publish this kind",
-        "expiration": "blocked: expiration is further out than max_expiration",
-        "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
-        "missing_tag": "invalid: missing required tag: {tag}",
-        "p_tag": "invalid: p tag requirement not met",
-        "rate_limited": "rate-limited: rate limit exceeded for this kind",
-        "tag_limits": "invalid: {detail}"
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "75h",
+    "max_age_of_event": "0s",
+    "max_age_event_in_future": "0s",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 32,
+      "max_tag_name_chars": 32,
+      "max_tag_value_chars": 128
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 100,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 1000,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 300,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 2500,
+        "window": "1d"
       }
+    ],
+    "errors": {
+      "auth_required": "auth-required: authentication required to publish this kind",
+      "expiration": "blocked: expiration is further out than max_expiration",
+      "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
+      "missing_tag": "invalid: missing required tag: {tag}",
+      "rate_limited": "rate-limited: rate limit exceeded for this kind",
+      "tag_limits": "invalid: {detail}"
     }
   },
-  "filters": {"reject_empty": true, "reject_search": true},
-  "read_limits": [
-    {"scope": "npub", "limit": 60, "window": "1h"},
-    {"scope": "npub", "limit": 400, "window": "1d"},
-    {"scope": "ip", "limit": 120, "window": "1h"},
-    {"scope": "ip", "limit": 800, "window": "1d"}
-  ],
-  "connection_limits": [
-    {"scope": "ip", "limit": 120, "window": "1h"}
-  ],
-  "count": {"reject": true},
-  "nip11": {
-    "name": "B Kind",
-    "description": "",
-    "max_message_length": 12288,
-    "max_subscriptions": 10,
-    "max_filters": 4,
-    "max_limit": 500,
-    "extra_nips": []
-  },
-  "negentropy": false
+  "1059": {
+    "description": "Private Direct Messages: privileged, expiring, authenticated, rate-limited",
+    "write": {
+      "allow": [
+        "*"
+      ]
+    },
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "75h",
+    "max_age_of_event": "0s",
+    "max_age_event_in_future": "0s",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 32,
+      "max_tag_name_chars": 32,
+      "max_tag_value_chars": 128
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 100,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 1000,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 300,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 2500,
+        "window": "1d"
+      }
+    ],
+    "errors": {
+      "auth_required": "auth-required: authentication required to publish this kind",
+      "expiration": "blocked: expiration is further out than max_expiration",
+      "max_event_content_size": "blocked: content exceeds size limit ({size} > {limit})",
+      "missing_tag": "invalid: missing required tag: {tag}",
+      "rate_limited": "rate-limited: rate limit exceeded for this kind",
+      "tag_limits": "invalid: {detail}"
+    }
+  }
 }

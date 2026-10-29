@@ -10,50 +10,88 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
 
 // Config is the whole policy set of a relay as data.
 //
-// There are two layers, and only two:
+// The document itself has one shape: kind number -> that kind's whole rule, and
+// nothing else. A kind is served exactly when it has a rule, so the document is
+// the served set.
 //
-//   - a document always replaces the sections it names, so BKIND_CONFIG and
-//     BKIND_CONFIG_JSON are patches over the document that came before them;
+// Loading is layering of documents, and only that:
+//
+//   - a document replaces the document that came before it, so BKIND_CONFIG and
+//     BKIND_CONFIG_JSON are whole policy files, not patches;
 //   - inside a document there is no inheritance. Every per-kind setting lives in
 //     the kind's own rule, and a rule says everything the relay does with that
-//     kind. A setting a rule leaves out is the Go zero value, which means "off",
-//     "none" or "nobody" — never "the relay's opinion".
+//     kind. A setting a rule leaves out is inactive: no limit, no cap, no tag
+//     rule, nobody.
 //
-// Nothing about policy is written in Go. The document a relay starts from when
-// no configuration is supplied is default.json, embedded at build time: the
-// reference relay is a file you can read, diff and copy, not a struct literal.
-// The only values Go insists on are the four NIP-11 ceilings, because zero means
-// "serve nothing" and a relay that cannot describe itself is not a relay.
+// Nothing about the per-kind policy is written in Go. The document a relay starts
+// from when no configuration is supplied is default.json, embedded at build time:
+// the reference relay is a file you can read, diff and copy, not a struct literal.
+// The relay-wide half (filters, limits, COUNT, NIP-11, negentropy) is not in the
+// document at all: Settings carries it, defaulted in Go and moved by flags.
 type Config struct {
-	Kinds KindWhitelist `json:"kinds"`
+	// Rules is the whole document: one complete rule per served kind, keyed by
+	// kind number. Nothing else is in it — a kind is served exactly when it has
+	// a rule, and there is no separate whitelist to keep in step with.
+	Rules map[string]*KindRule
 
-	// Rules is one complete rule per served kind, keyed by kind number.
-	Rules map[string]*KindRule `json:"rules"`
-
-	Filters          FilterRules `json:"filters"`
-	ReadLimits       []RateLimit `json:"read_limits"`
-	ConnectionLimits []RateLimit `json:"connection_limits"`
-	Count            CountRules  `json:"count"`
-	NIP11            NIP11Rules  `json:"nip11"`
-	Negentropy       bool        `json:"negentropy"`
+	// Settings are the relay-wide policies. They are not part of the document:
+	// the file says which kinds the relay serves and how, and everything else is
+	// a flag, an environment variable or the Go defaults below.
+	Settings Settings
 }
 
-// KindWhitelist is what the relay serves at all.
-type KindWhitelist struct {
-	// Whitelist is the complete set of kinds the relay accepts and serves.
-	Whitelist []uint16 `json:"whitelist"`
-	// AllowEphemeral lets every ephemeral kind (20000-29999) through without
-	// listing each one.
-	AllowEphemeral bool `json:"allow_ephemeral"`
-	// RejectUnservedFilters makes a REQ naming a kind outside the whitelist
-	// fail with a reason instead of being silently narrowed.
-	RejectUnservedFilters bool `json:"reject_unserved_filters"`
+// Settings is the relay-wide half of the policy set: everything that is not a
+// property of one kind. None of it is written in the document, so a document is
+// exactly a set of kinds and nothing else.
+type Settings struct {
+	// Filters are the request-shape policies.
+	Filters FilterRules
+	// ReadLimits bound REQs, relay-wide: one REQ spans kinds.
+	ReadLimits []RateLimit
+	// ConnectionLimits bound connections, per ip.
+	ConnectionLimits []RateLimit
+	// Count is NIP-45; Reject keeps COUNT refused.
+	Count CountRules
+	// NIP11 is the relay information document.
+	NIP11 NIP11Rules
+	// Negentropy is NIP-77 set reconciliation.
+	Negentropy bool
+	// RejectUnservedFilters makes a REQ naming an unserved kind fail with a
+	// reason instead of being silently narrowed.
+	RejectUnservedFilters bool
+}
+
+// DefaultSettings is the relay-wide policy of a relay that was given no flags:
+// the values the reference relay used to spell in its document.
+func DefaultSettings() Settings {
+	return Settings{
+		Filters: FilterRules{RejectEmpty: true, RejectSearch: true},
+		ReadLimits: []RateLimit{
+			{Scope: "npub", Limit: 60, Window: Duration{time.Hour}},
+			{Scope: "npub", Limit: 400, Window: Duration{24 * time.Hour}},
+			{Scope: "ip", Limit: 120, Window: Duration{time.Hour}},
+			{Scope: "ip", Limit: 800, Window: Duration{24 * time.Hour}},
+		},
+		ConnectionLimits: []RateLimit{
+			{Scope: "ip", Limit: 120, Window: Duration{time.Hour}},
+		},
+		Count: CountRules{Reject: true},
+		NIP11: NIP11Rules{
+			Name:             "B Kind",
+			MaxMessageLength: 12288,
+			MaxSubscriptions: 10,
+			MaxFilters:       4,
+			MaxLimit:         500,
+		},
+		RejectUnservedFilters: true,
+	}
 }
 
 // RuleSettings is the per-kind policy of one kind. It is embedded in KindRule
@@ -87,10 +125,6 @@ type RuleSettings struct {
 	// MaxFutureAge rejects events created_at further in the future than this —
 	// the clock-skew allowance. Zero means no limit.
 	MaxFutureAge Duration `json:"max_age_event_in_future"`
-	// PTag names the "p" tag rule; "hex" requires exactly one "p" tag with a
-	// valid pubkey that is not the author, which is also what makes a
-	// privileged kind recipient-visible. Empty means no p rule.
-	PTag string `json:"p_tag"`
 	// RequiredTags must each appear exactly once with a non-empty value.
 	// "expiration" here means a mandatory NIP-40 tag.
 	RequiredTags []string `json:"required_tags"`
@@ -194,11 +228,11 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	return cfg, nil
 }
 
-// parseConfig reads one document into a zero Config. A document that arrives
-// through LoadConfig or WithJSON may be sparse, so the rules are simply whatever
-// it said; Validate is what decides whether that is a relay.
+// parseConfig reads one document into a Config with the default settings: the
+// document is only the kinds, so the relay-wide half comes from Go. The document
+// is the served set, so Validate is what decides whether that is a relay.
 func parseConfig(data []byte) (Config, error) {
-	var cfg Config
+	cfg := Config{Rules: map[string]*KindRule{}, Settings: DefaultSettings()}
 	if err := cfg.applyJSON(data); err != nil {
 		return cfg, err
 	}
@@ -208,18 +242,17 @@ func parseConfig(data []byte) (Config, error) {
 	return cfg, nil
 }
 
-// WithJSON applies a document over the receiver: every section it names replaces
-// that section, every rule it names replaces that kind's rule in full, and
-// everything it does not name keeps its current value.
+// WithJSON applies a document over the receiver: the document is the whole kind
+// set, so the kinds it names are served and every other kind is not.
 //
-// A rule is not patched field by field. It is one kind's whole policy, and half
-// of one policy layered on half of another is exactly the kind of quiet answer
-// this configuration format exists to avoid: to change one setting of a kind,
-// name the whole rule.
+// A rule is not patched field by field, and neither is the kind set. It is one
+// kind's whole policy, and half of one policy layered on half of another is
+// exactly the kind of quiet answer this configuration format exists to avoid: to
+// change one setting of a kind, name the whole rule.
 func (c Config) WithJSON(data []byte) (Config, error) {
 	out := c
-	// the rules map is shared by the value copy, and applying a document prunes it
-	// and replaces entries: give the result a map of its own so the receiver is
+	// the rules map is shared by the value copy, and applying a document replaces
+	// and removes entries: give the result a map of its own so the receiver is
 	// never edited by a call that returned a new Config
 	out.Rules = make(map[string]*KindRule, len(c.Rules))
 	for key, rule := range c.Rules {
@@ -234,61 +267,67 @@ func (c Config) WithJSON(data []byte) (Config, error) {
 	return out, nil
 }
 
-// applyJSON merges one document onto the receiver with encoding/json. The decoder
-// refuses unknown fields at every level, so a typo is an error wherever it sits.
-// A rule decoded over an existing one is a fresh value — that is the "replace,
-// never patch" rule, and it comes from the decoder rather than from bookkeeping.
+// applyJSON makes one document the receiver's kind set. The decoder refuses
+// unknown fields at every level, so a typo is an error wherever it sits; a rule a
+// document names is a fresh value, which is the "replace, never patch" rule, and
+// it comes from the decoder rather than from bookkeeping.
 func (c *Config) applyJSON(data []byte) error {
-	before := make(map[string]bool, len(c.Rules))
-	for key := range c.Rules {
-		before[key] = true
+	document, err := decodeDocument(data)
+	if err != nil {
+		return err
 	}
-
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(c); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-
-	// a null rule is how a document says "this kind has no rule any more"; a kind
-	// it does not name keeps its rule
-	for key, rule := range c.Rules {
-		if rule == nil {
-			delete(c.Rules, key)
-		}
-	}
-
-	// a document that replaces the whitelist drops the rules it inherited for the
-	// kinds it leaves out, so narrowing what is served cannot fail on a stale rule.
-	// A rule the document itself named for an unserved kind is not stale: it is a
-	// contradiction, and Validate says so.
-	for key := range before {
-		kind, err := strconv.ParseUint(key, 10, 16)
-		if err != nil {
-			continue
-		}
-		if _, ok := c.Rules[key]; ok && !slices.Contains(c.Kinds.Whitelist, uint16(kind)) {
-			delete(c.Rules, key)
-		}
-	}
+	c.Rules = document
 	return nil
+}
+
+// decodeDocument reads a policy document: kind number -> whole rule, and nothing
+// else. It is the one place that knows the document's shape, so Validate, WithJSON
+// and LoadConfig all agree on it.
+//
+// The top level is decoded as raw values first, so a key that is not a kind number
+// is reported as such instead of as a field error inside whatever it holds.
+func decodeDocument(data []byte) (map[string]*KindRule, error) {
+	var raw map[string]json.RawMessage
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	document := make(map[string]*KindRule, len(raw))
+	for key, value := range raw {
+		if _, err := strconv.ParseUint(key, 10, 16); err != nil {
+			return nil, fmt.Errorf("document has key %q, which is not a kind number: the document is one rule per kind and nothing else", key)
+		}
+		if string(bytes.TrimSpace(value)) == "null" {
+			return nil, fmt.Errorf("document has a null rule for kind %s: a kind is served by a rule, so there is nothing to delete", key)
+		}
+
+		var rule KindRule
+		ruleDecoder := json.NewDecoder(bytes.NewReader(value))
+		ruleDecoder.DisallowUnknownFields()
+		if err := ruleDecoder.Decode(&rule); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		document[key] = &rule
+	}
+	return document, nil
 }
 
 // Validate checks the configuration and normalizes it (nil and empty are the
 // same setting). It is run by parseConfig, WithJSON and Wire, so a Config built
 // in code cannot skip it.
 func (c *Config) Validate() error {
-	if len(c.Kinds.Whitelist) == 0 {
-		c.Kinds.Whitelist = nil
+	if len(c.Rules) == 0 {
+		return fmt.Errorf("the document is empty: the relay would serve nothing")
 	}
-	if len(c.NIP11.ExtraNIPs) == 0 {
-		c.NIP11.ExtraNIPs = nil
+	if len(c.Settings.NIP11.ExtraNIPs) == 0 {
+		c.Settings.NIP11.ExtraNIPs = nil
 	}
-	if len(c.ReadLimits) == 0 {
-		c.ReadLimits = nil
+	if len(c.Settings.ReadLimits) == 0 {
+		c.Settings.ReadLimits = nil
 	}
-	if len(c.ConnectionLimits) == 0 {
-		c.ConnectionLimits = nil
+	if len(c.Settings.ConnectionLimits) == 0 {
+		c.Settings.ConnectionLimits = nil
 	}
 
 	k := c.KindRules()
@@ -299,12 +338,9 @@ func (c *Config) Validate() error {
 	for _, key := range sortedRuleKeys(c.Rules) {
 		kind64, err := strconv.ParseUint(key, 10, 16)
 		if err != nil {
-			return fmt.Errorf("rules has key %q, which is not a kind number", key)
+			return fmt.Errorf("document has key %q, which is not a kind number", key)
 		}
 		kind := uint16(kind64)
-		if !k.Has(kind) {
-			return fmt.Errorf("rules has kind %d, which kinds.whitelist does not include", kind)
-		}
 		rule := c.Rules[key]
 		if rule.Description == "" {
 			return fmt.Errorf("rules[%d].description is empty: every served kind says what it is", kind)
@@ -314,36 +350,24 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// every served kind needs a rule: a kind that says nothing about itself is not
-	// a kind this relay knows how to serve
-	for _, kind := range k.Sorted() {
-		if c.Rules[strconv.Itoa(int(kind))] == nil {
-			return fmt.Errorf("kinds.whitelist serves kind %d but rules has no rule for it: every served kind needs a description and its settings", kind)
-		}
-	}
-
-	if err := validateRateLimits("read_limits", c.ReadLimits, "npub", "ip"); err != nil {
+	if err := validateRateLimits("read_limits", c.Settings.ReadLimits, "npub", "ip"); err != nil {
 		return err
 	}
-	if err := validateRateLimits("connection_limits", c.ConnectionLimits, "ip"); err != nil {
+	if err := validateRateLimits("connection_limits", c.Settings.ConnectionLimits, "ip"); err != nil {
 		return err
 	}
 
-	if c.NIP11.MaxMessageLength <= 0 || c.NIP11.MaxSubscriptions <= 0 ||
-		c.NIP11.MaxFilters <= 0 || c.NIP11.MaxLimit <= 0 {
+	if c.Settings.NIP11.MaxMessageLength <= 0 || c.Settings.NIP11.MaxSubscriptions <= 0 ||
+		c.Settings.NIP11.MaxFilters <= 0 || c.Settings.NIP11.MaxLimit <= 0 {
 		return fmt.Errorf("nip11 limits must be positive")
 	}
-	for _, nip := range c.NIP11.ExtraNIPs {
+	for _, nip := range c.Settings.NIP11.ExtraNIPs {
 		if nip <= 0 {
 			return fmt.Errorf("nip11.extra_nips contains %d, which is not a NIP number", nip)
 		}
 	}
 
 	return nil
-}
-
-func errBadPTag(value string) error {
-	return fmt.Errorf("p_tag %q must be \"hex\" or empty", value)
 }
 
 func sortedRuleKeys(rules map[string]*KindRule) []string {
@@ -371,9 +395,6 @@ func validateFields(f *RuleSettings, where string) error {
 		f.Errors = nil
 	}
 
-	if f.PTag != "" && f.PTag != "hex" {
-		return fmt.Errorf("%s: %w", where, errBadPTag(f.PTag))
-	}
 	if f.MaxEventSize.Bytes < 0 {
 		return fmt.Errorf("%s: max_event_size cannot be negative", where)
 	}
@@ -419,10 +440,7 @@ func validateFields(f *RuleSettings, where string) error {
 		// a tag budget smaller than the tags the rule demands itself is a relay
 		// that rejects everything: better to say so at startup than to let an
 		// operator wonder why nothing publishes
-		mandatory := append([]string(nil), f.RequiredTags...)
-		if f.PTag == "hex" {
-			mandatory = append(mandatory, "p")
-		}
+		mandatory := f.RequiredTags
 		if len(mandatory) > f.TagLimits.MaxTags {
 			return fmt.Errorf("%s: tag_limits.max_tags is %d but %s must be present, so no event could be accepted",
 				where, f.TagLimits.MaxTags, quoteList(mandatory))
@@ -512,25 +530,44 @@ func (c Config) Rule(kind uint16) *KindRule {
 	return &KindRule{}
 }
 
-// RulesByKind is Rule for the whole whitelist.
+// RulesByKind is Rule for every kind the document serves.
 func (c Config) RulesByKind() map[uint16]*KindRule {
-	out := make(map[uint16]*KindRule, len(c.Kinds.Whitelist))
-	for _, kind := range c.Kinds.Whitelist {
+	out := make(map[uint16]*KindRule, len(c.Rules))
+	for _, kind := range c.KindNumbers() {
 		out[kind] = c.Rule(kind)
 	}
 	return out
 }
 
-// FilterRules are the request-shape policies.
+// KindNumbers is the served set: the document's keys, sorted. It is derived from
+// the rules themselves, so there is no whitelist to keep in step with them.
+func (c Config) KindNumbers() []uint16 {
+	out := make([]uint16, 0, len(c.Rules))
+	for key, rule := range c.Rules {
+		if rule == nil {
+			continue
+		}
+		kind, err := strconv.ParseUint(key, 10, 16)
+		if err != nil {
+			continue // Validate names it
+		}
+		out = append(out, uint16(kind))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// FilterRules are the request-shape policies. They are relay-wide settings, not
+// document fields.
 type FilterRules struct {
-	RejectEmpty  bool `json:"reject_empty"`
-	RejectSearch bool `json:"reject_search"`
+	RejectEmpty  bool
+	RejectSearch bool
 }
 
 // CountRules is NIP-45. Reject keeps COUNT refused, which is the only safe answer
 // for private events; setting it to false serves COUNT and advertises NIP-45.
 type CountRules struct {
-	Reject bool `json:"reject"`
+	Reject bool
 }
 
 // NIP11Rules is the relay information document. SupportedNIPs and the limitation
@@ -538,34 +575,29 @@ type CountRules struct {
 // relay does not have takes a deliberate ExtraNIPs entry.
 //
 // The four positive limits are the only values Go insists on: zero would forbid
-// every frame or every subscription, so a document has to state them.
+// every frame or every subscription, so the Go defaults state them and flags can
+// move them.
 type NIP11Rules struct {
-	Name string `json:"name"`
+	Name string
 	// Description is generated from the kind list when left empty.
-	Description      string `json:"description"`
-	MaxMessageLength int    `json:"max_message_length"`
-	MaxSubscriptions int    `json:"max_subscriptions"`
-	MaxFilters       int    `json:"max_filters"`
-	MaxLimit         int    `json:"max_limit"`
+	Description      string
+	MaxMessageLength int
+	MaxSubscriptions int
+	MaxFilters       int
+	MaxLimit         int
 	// ExtraNIPs is appended to the derived supported_nips list.
-	ExtraNIPs []int `json:"extra_nips"`
+	ExtraNIPs []int
 }
 
 // JSON renders the configuration as the canonical document a relay reads back:
-// every section in a fixed order, every rule in full, so it can be diffed,
-// reviewed and fed back. This is what the relay prints for -print-config, and it
-// is byte-identical to policies/default.json for an unconfigured relay.
+// every kind's rule in full, and nothing else. This is what the relay prints for
+// -print-config, and it is byte-identical to policies/default.json for an
+// unconfigured relay.
 func (c Config) JSON() ([]byte, error) {
-	out := c
-	out.Kinds.Whitelist = nonNil(out.Kinds.Whitelist)
-	out.ReadLimits = nonNil(out.ReadLimits)
-	out.ConnectionLimits = nonNil(out.ConnectionLimits)
-	out.NIP11.ExtraNIPs = nonNil(out.NIP11.ExtraNIPs)
-
 	// a nil slice and an empty one mean the same thing, and "none" reads better
 	// than "null" — but an empty allow list is printed as [] because that is what
 	// it means: nobody
-	out.Rules = make(map[string]*KindRule, len(c.Rules))
+	document := make(map[string]*KindRule, len(c.Rules))
 	for key, rule := range c.Rules {
 		if rule == nil {
 			continue
@@ -577,14 +609,14 @@ func (c Config) JSON() ([]byte, error) {
 		printed.RateLimits = nonNil(printed.RateLimits)
 		printed.TagPatterns = nonNilMap(printed.TagPatterns)
 		printed.Errors = nonNilMap(printed.Errors)
-		out.Rules[key] = &printed
+		document[key] = &printed
 	}
 
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(out); err != nil {
+	if err := encoder.Encode(document); err != nil {
 		return nil, err
 	}
 	return collapseScalarContainers(bytes.TrimRight(buffer.Bytes(), "\n")), nil
@@ -647,9 +679,9 @@ func joinLines(match []byte, open, close, sep string) []byte {
 	return []byte(out + close)
 }
 
-// ApplyEnv overrides the settings worth a command line: the whitelist (which
-// prunes the rules of the kinds it drops) and the NIP-11 name and description.
-// Everything else belongs in the document.
+// ApplyEnv overrides the settings worth a command line: which kinds are served
+// (BKIND_KINDS prunes the rules of the kinds it drops) and the NIP-11 name and
+// description. Everything else belongs in the document or in the Go defaults.
 func (c *Config) ApplyEnv(lookup func(string) (string, bool)) error {
 	if raw, ok := lookup("BKIND_KINDS"); ok && strings.TrimSpace(raw) != "" {
 		kinds, err := parseKinds("BKIND_KINDS", raw)
@@ -659,24 +691,22 @@ func (c *Config) ApplyEnv(lookup func(string) (string, bool)) error {
 		c.SetKinds(kinds)
 	}
 	if raw, ok := lookup("BKIND_NAME"); ok {
-		c.NIP11.Name = raw
+		c.Settings.NIP11.Name = raw
 	}
 	if raw, ok := lookup("BKIND_DESCRIPTION"); ok {
-		c.NIP11.Description = raw
+		c.Settings.NIP11.Description = raw
 	}
 	return nil
 }
 
-// SetKinds replaces the whitelist and drops the rules of kinds that are no longer
-// served, so narrowing the whitelist cannot leave a stale rule behind. The
-// environment and the command line both go through it.
+// SetKinds narrows the served set to kinds and drops the rules it leaves out, so
+// narrowing what is served cannot leave a stale rule behind. The environment and
+// the command line both go through it.
 func (c *Config) SetKinds(kinds []uint16) {
-	c.Kinds.Whitelist = kinds
 	c.pruneRules(kinds)
 }
 
-// pruneRules deletes the rules of kinds outside keep. Keys that are not kind
-// numbers are left alone: Validate names them.
+// pruneRules deletes the rules of kinds outside keep.
 func (c *Config) pruneRules(keep []uint16) {
 	for key := range c.Rules {
 		kind, err := strconv.ParseUint(key, 10, 16)
