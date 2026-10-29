@@ -38,8 +38,7 @@
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",
         "tag_limits": "invalid: {detail}"
-      },
-      "shape": false
+      }
     },
     "4": {
       "description": "Private kind-4 DMs: privileged, expiring, authenticated, rate-limited",
@@ -74,8 +73,7 @@
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",
         "tag_limits": "invalid: {detail}"
-      },
-      "shape": true
+      }
     }
   },
   "filters": {"reject_empty": true, "reject_search": true},

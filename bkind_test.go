@@ -970,14 +970,14 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 		"kinds": {"whitelist": [4]},
 		"rules": {
 			"4": {
+				"description": "NIP-04 direct messages, from a file",
 				"write": {"allow": "*"},
 				"read": {"allow": "*", "privileged": true},
 				"require_auth": true,
 				"max_event_content_size": 64,
 				"tag_limits": {"max_tags": 8, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
 				"required_tags": ["expiration", "client"],
-				"p_tag": "hex",
-				"shape": true
+				"p_tag": "hex"
 			}
 		}
 	}`), 0o600); err != nil {

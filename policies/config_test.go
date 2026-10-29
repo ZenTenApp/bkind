@@ -112,7 +112,7 @@ func TestConfigDocumentReplacesWhatItNames(t *testing.T) {
 	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
 		"kinds": {"whitelist": [4, 1059]},
 		"rules": {
-			"4": {"max_event_content_size": 512},
+			"4": {"description": "kind 4, with only a size limit", "max_event_content_size": 512},
 			"1059": {"description": "gift wraps", "p_tag": "hex"}
 		}
 	}`))
@@ -164,29 +164,30 @@ func TestConfigRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// A document can take a rule away without taking the kind away: null means "this
-// kind has no rule", and the kind is then served with the empty rule.
+// A document can take a rule away: null says "this kind has no rule", and a kind
+// with no rule cannot be served, so dropping a rule means dropping the kind too.
 func TestNullRuleDeletes(t *testing.T) {
-	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"4": null}}`))
+	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
+		"kinds": {"whitelist": [5, 62]},
+		"rules": {"4": null}
+	}`))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 	if _, ok := cfg.Rules["4"]; ok {
 		t.Fatalf("kind 4 still has a rule: %+v", cfg.Rules["4"])
 	}
-	if rule := cfg.Rule(4); !rule.Read.Allow.Nobody() || rule.RequireAuth {
-		t.Fatalf("a deleted rule must read as the empty rule: %+v", rule)
+
+	// kind 4 is no longer served, so the whitelist gate refuses it
+	relay, _ := wire(t, cfg)
+	restrict := relay.RejectEvent[0]
+	if reject, msg := restrict(aliceCtx(), &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "x"}); !reject || !strings.Contains(msg, "not allowed") {
+		t.Fatalf("an unserved kind must be refused: %v %q", reject, msg)
 	}
 
-	// the kind is still served, and served to nobody
-	relay, rules := wire(t, cfg)
-	write := writePolicy(relay)
-	evt := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "x"}
-	if reject, _ := write(aliceCtx(), evt); !reject {
-		t.Fatal("a kind with no rule must let nobody publish")
-	}
-	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{4}, Authors: []string{aliceKey}}); msg == "" {
-		t.Fatal("a kind with no rule must let nobody read")
+	// deleting a rule and keeping the kind is a contradiction, not a quiet reset
+	if _, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"4": null}}`)); err == nil || !strings.Contains(err.Error(), "no rule for it") {
+		t.Fatalf("a served kind without a rule must be refused: %v", err)
 	}
 }
 
@@ -229,7 +230,7 @@ func TestSummarySpellingsAreRejected(t *testing.T) {
 // "max_event_content_size", "max_expiration" and "required_tags".
 func TestCanonicalRuleSpelling(t *testing.T) {
 	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
-		"kinds": {"whitelist": [4, 1059]},
+		"kinds": {"whitelist": [4]},
 		"rules": {
 			"4": {
 				"description": "Nostr DM events",
@@ -266,9 +267,11 @@ func TestCanonicalRuleSpelling(t *testing.T) {
 		t.Fatalf("required_tags did not land: %v", rule.RequiredTags)
 	}
 
-	// a kind whitelisted with no rule of its own keeps the defaults
-	if _, ok := cfg.Rules["1059"]; ok {
-		t.Fatal("kind 1059 got a rule it was never given")
+	// the rules of the kinds the document's whitelist leaves out are pruned
+	for _, key := range []string{"5", "62"} {
+		if _, ok := cfg.Rules[key]; ok {
+			t.Fatalf("kind %s kept a rule although it is not served", key)
+		}
 	}
 }
 
@@ -329,14 +332,14 @@ func TestDurationAndSizeNotations(t *testing.T) {
 
 func TestConfigEnvOverrides(t *testing.T) {
 	cfg, err := policies.LoadConfig(envFunc(map[string]string{
-		"BKIND_KINDS": "4,1059",
+		"BKIND_KINDS": "4",
 		"BKIND_NAME":  "test relay",
 	}))
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
 
-	if got := cfg.Kinds.Whitelist; len(got) != 2 || got[0] != 4 || got[1] != 1059 {
+	if got := cfg.Kinds.Whitelist; len(got) != 1 || got[0] != 4 {
 		t.Fatalf("whitelist is %v", got)
 	}
 	// the rules of the dropped kinds were pruned with the whitelist
@@ -353,7 +356,7 @@ func TestConfigEnvOverrides(t *testing.T) {
 func TestConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay.json")
-	if err := os.WriteFile(path, []byte(`{"rules": {"4": {"max_event_content_size": 100}}, "nip11": {"name": "from file"}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"rules": {"4": {"description": "kind 4, size-limited", "max_event_content_size": 100}}, "nip11": {"name": "from file"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -476,12 +479,18 @@ func TestConfigValidationErrors(t *testing.T) {
 			reason: "scope \"npub\" must be ip",
 		},
 		{
-			name: "shape without a validator",
+			name: "a rule without a description",
 			mutate: func(c *policies.Config) {
-				c.Kinds.Whitelist = []uint16{4, 1}
-				c.Rules["1"] = &policies.KindRule{Shape: true}
+				c.Rules["4"].Description = ""
 			},
-			reason: "no registered shape validator",
+			reason: "description is empty",
+		},
+		{
+			name: "a served kind without a rule",
+			mutate: func(c *policies.Config) {
+				delete(c.Rules, "62")
+			},
+			reason: "rules has no rule for it",
 		},
 		{
 			name: "an unknown error template key",
@@ -508,48 +517,32 @@ func TestConfigValidationErrors(t *testing.T) {
 // top-level defaults — that is what makes the defaults worth having. A rule that
 // is built in Go and holds nothing is the opposite: fully explicit, so every
 // setting is zero, which means "no restrictions".
-// A kind the document gave no rule is served with the empty rule: nobody may
-// publish it and nobody may read it. Once there is nothing to inherit from, that
-// is what "the document did not say" has to mean.
-func TestUnruledKindIsTheEmptyRule(t *testing.T) {
+// Every served kind needs a rule, because a rule now carries the one thing a kind
+// cannot be silent about: what it is. The exception is an ephemeral kind admitted
+// by allow_ephemeral, which was never in the whitelist and has no rule to give.
+func TestEveryServedKindNeedsARule(t *testing.T) {
 	cfg := policies.DefaultConfig()
 	cfg.SetKinds([]uint16{4, 1059})
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "no rule for it") {
+		t.Fatalf("a whitelisted kind without a rule must be refused, got %v", err)
+	}
 
+	// an ephemeral kind is served on write because the flag says so, and is not
+	// served on read because a REQ is answered from the whitelist
+	cfg = policies.DefaultConfig()
+	cfg.Kinds.AllowEphemeral = true
 	relay, rules := wire(t, cfg)
 	write := writePolicy(relay)
 
-	evt := &nostr.Event{Kind: 1059, PubKey: aliceKey, Content: "x"}
-	if reject, msg := write(aliceCtx(), evt); !reject {
-		t.Fatalf("an unruled kind must let nobody publish it: %v %q", reject, msg)
+	evt := &nostr.Event{Kind: 20001, PubKey: aliceKey, Content: "x"}
+	if reject, msg := write(aliceCtx(), evt); reject {
+		t.Fatalf("an ephemeral kind admitted by allow_ephemeral must be writable: %q", msg)
 	}
-	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{1059}, Authors: []string{aliceKey}}); msg == "" {
-		t.Fatal("an unruled kind must let nobody read it")
-	}
-	if !rules.PreventBroadcast(&bkind.WebSocket{AuthedPublicKey: aliceKey}, evt) {
-		t.Fatal("live delivery must agree: an unruled kind goes to nobody")
-	}
-
-	// giving the kind a rule of its own is what opens it up
-	cfg.Rules["1059"] = &policies.KindRule{RuleSettings: policies.RuleSettings{
-		Write: policies.WriteGate{Allow: policies.AllowList{"*"}},
-		Read:  policies.ReadGate{Allow: policies.AllowList{"*"}},
-	}}
-	relay, rules = wire(t, cfg)
-	write = writePolicy(relay)
-	if reject, _ := write(context.Background(), evt); reject {
-		t.Fatal("an open rule must let anyone publish")
-	}
-	if reject, _ := rules.ReadFilter(context.Background(), nostr.Filter{Kinds: []int{1059}}); reject {
-		t.Fatal("an open rule must let anyone read")
-	}
-	if rules.PreventBroadcast(&bkind.WebSocket{}, evt) {
-		t.Fatal("an open rule must deliver to anyone")
+	if _, msg := rules.ReadFilter(aliceCtx(), nostr.Filter{Kinds: []int{20001}, Authors: []string{aliceKey}}); msg == "" {
+		t.Fatal("an ephemeral kind is not in the whitelist, so it is not served on read")
 	}
 }
 
-// The top-level settings are the defaults every kind starts from, and a rule
-// names only what it changes — including an explicit zero, which means "off"
-// rather than "inherit".
 // A rule stands alone. Two kinds in one document can have unrelated policies, and
 // neither learns anything from the other — there is no top-level block to
 // inherit from and no presence bookkeeping to get wrong.
@@ -609,30 +602,36 @@ func TestRulesDoNotInherit(t *testing.T) {
 	}
 }
 
-// "shape" runs a validator that belongs to one kind, so it is rule-local: a
-// newly whitelisted kind must not inherit it and then fail for having no
-// validator of its own.
-func TestShapeIsNotInherited(t *testing.T) {
-	cfg, err := policies.DefaultConfig().WithJSON([]byte(`{
-		"kinds": {"whitelist": [4, 1059]},
-		"rules": {"4": {"shape": true}}
-	}`))
-	if err != nil {
-		t.Fatalf("failed to parse: %v", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("whitelisting a kind without a validator must be legal: %v", err)
-	}
-	if !cfg.Rule(4).Shape {
-		t.Fatal("kind 4 asked for its validator and did not get it")
-	}
-	if cfg.Rule(1059).Shape {
-		t.Fatal("kind 1059 inherited a shape flag it cannot honour")
+// The structural validator is not a setting: it runs for every kind that has one,
+// and a document cannot switch it on or off. It belongs to one kind, so a kind
+// without a validator simply has nothing to run.
+func TestShapeIsNotASetting(t *testing.T) {
+	// a document that still names the old switch is refused like any other typo
+	if _, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"4": {"shape": true}}}`)); err == nil || !strings.Contains(err.Error(), `unknown field "shape"`) {
+		t.Fatalf("shape must not be accepted as a setting: %v", err)
 	}
 
-	// asking for a validator that does not exist is still an error
-	if _, err := policies.DefaultConfig().WithJSON([]byte(`{"rules": {"1059": {"shape": true}}, "kinds": {"whitelist": [1059]}}`)); err == nil || !strings.Contains(err.Error(), "shape") {
-		t.Fatalf("a rule asking for a missing validator must be refused, got %v", err)
+	// kind 4's validator runs because kind 4 has one
+	cfg := policies.DefaultConfig()
+	relay, _ := wire(t, cfg)
+	write := writePolicy(relay)
+
+	// a kind-4 event with an "e" tag is refused by ValidateKind4Shape, which no
+	// rule asked for
+	bad := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}, {"e", strings.Repeat("a", 64)}}}
+	if reject, msg := write(aliceCtx(), bad); !reject || !strings.Contains(msg, "e") {
+		t.Fatalf("the registered validator must always run: %v %q", reject, msg)
+	}
+
+	// a kind with no registered validator is served without one
+	cfg.Kinds.Whitelist = append(cfg.Kinds.Whitelist, 1)
+	cfg.Rules["1"] = &policies.KindRule{
+		Description:  "public notes, with no structural validator",
+		RuleSettings: policies.RuleSettings{Write: policies.WriteGate{Allow: policies.AllowList{"*"}}, Read: policies.ReadGate{Allow: policies.AllowList{"*"}}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a kind with no validator must be servable: %v", err)
 	}
 }
 
@@ -1285,9 +1284,9 @@ func TestAppDataExampleResolves(t *testing.T) {
 		}
 	}
 
-	// kind 5 has no rule here, so it keeps the reference rule for deletions
+	// kind 5 keeps the reference rule for deletions: the example does not name it
 	deletion := cfg.Rule(5)
-	if deletion.PTag != "" || !deletion.Shape {
+	if deletion.PTag != "" || deletion.Description == "" {
 		t.Fatalf("kind 5 should keep the reference deletion rule: %+v", deletion)
 	}
 
@@ -1441,12 +1440,14 @@ func TestTagBudgetMustFitRequiredTags(t *testing.T) {
 	}{
 		{
 			name: "a p rule and two required tags against max_tags: 1",
-			json: `{"rules": {"4": {"p_tag": "hex", "required_tags": ["expiration", "client"],
+			json: `{"rules": {"4": {"description": "a tag budget that cannot be met",
+			        "p_tag": "hex", "required_tags": ["expiration", "client"],
 			        "tag_limits": {"max_tags": 1, "max_tag_name_chars": 1, "max_tag_value_chars": 8}}}}`,
 		},
 		{
 			name: "three required tags against max_tags: 2",
-			json: `{"rules": {"4": {"required_tags": ["d", "client", "expiration"],
+			json: `{"rules": {"4": {"description": "three required tags against a budget of two",
+			        "required_tags": ["d", "client", "expiration"],
 			        "tag_limits": {"max_tags": 2, "max_tag_name_chars": 2, "max_tag_value_chars": 8}}}}`,
 		},
 	}

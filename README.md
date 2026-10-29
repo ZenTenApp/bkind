@@ -36,8 +36,9 @@ in [`examples/bkind/main.go`](./examples/bkind/main.go).
 
 On top of the requirements, the Kind 4 shape is validated: exactly one `p` tag,
 a 64-character hex pubkey, not the author, no `e`/`a`/`d` tags, and non-empty
-(encrypted) content. See `ValidateKind4Shape` — wired by `p_tag: "hex"` and
-`shape: true` on the kind's rule.
+(encrypted) content. See `ValidateKind4Shape`. The structural validator of a kind
+is not a setting: it runs whenever one is registered for that kind, because a
+relay should not be able to serve a kind it does not know how to check.
 
 ### Deliberate deviations from the original spec
 

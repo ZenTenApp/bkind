@@ -30,8 +30,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": false
+      "errors": {}
     },
     "4": {
       "description": "Nostr DM events",
@@ -58,8 +57,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": true
+      "errors": {}
     }
   },
   "filters": {"reject_empty": true, "reject_search": true},

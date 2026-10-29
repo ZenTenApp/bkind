@@ -107,23 +107,23 @@ type RuleSettings struct {
 	Errors map[string]string `json:"errors"`
 }
 
-// KindRule is one kind's complete rule: the description, every per-kind setting,
-// and whether the registered structural validator for that kind runs.
+// KindRule is one kind's complete rule: what the kind is, in a sentence, and
+// every per-kind setting.
 //
 // It is a plain struct on purpose. A rule read from a document and a rule built
 // in Go are the same thing, and there is nothing to reconcile between them: no
 // "was this field mentioned" bookkeeping, because there is nothing to inherit.
+//
+// The structural validator of a kind is not a setting: it runs whenever one is
+// registered for the kind (policies/kinds.go), because a relay should not be able
+// to serve a kind it does not know how to check. The validator itself is code — a
+// document cannot carry code — so there is nothing here to switch on.
 type KindRule struct {
-	// Description documents the kind for the operator; it is not sent anywhere.
+	// Description is required: one sentence saying what this kind is. It is for
+	// the operator (logs, reviews, the document itself) and is not sent anywhere.
 	Description string `json:"description"`
 
 	RuleSettings
-
-	// Shape runs the registered structural validator for this kind
-	// (policies/kinds.go), when there is one. The validator itself is code,
-	// because a document cannot carry code; the rule decides only whether it
-	// runs.
-	Shape bool `json:"shape"`
 }
 
 // defaultDocument is the reference relay as data: the policy set of
@@ -306,11 +306,19 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("rules has kind %d, which kinds.whitelist does not include", kind)
 		}
 		rule := c.Rules[key]
+		if rule.Description == "" {
+			return fmt.Errorf("rules[%d].description is empty: every served kind says what it is", kind)
+		}
 		if err := validateFields(&rule.RuleSettings, fmt.Sprintf("rules[%d]", kind)); err != nil {
 			return err
 		}
-		if rule.Shape && ShapeValidator(kind) == nil {
-			return fmt.Errorf("rules[%d]: shape is true but kind %d has no registered shape validator", kind, kind)
+	}
+
+	// every served kind needs a rule: a kind that says nothing about itself is not
+	// a kind this relay knows how to serve
+	for _, kind := range k.Sorted() {
+		if c.Rules[strconv.Itoa(int(kind))] == nil {
+			return fmt.Errorf("kinds.whitelist serves kind %d but rules has no rule for it: every served kind needs a description and its settings", kind)
 		}
 	}
 

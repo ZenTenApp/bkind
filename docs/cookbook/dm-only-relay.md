@@ -239,7 +239,7 @@ c.writePolicy(),             // the checks of the event's own effective rule —
 //   write.allow, require_auth, max_age_of_event, max_age_event_in_future,
 //   max_expiration + required_tags, tag_patterns, max_event_size,
 //   max_event_content_size, tag_limits,
-//   p_tag, the shape validator, the kind's write rate limits
+//   p_tag, the kind's structural validator, the kind's write rate limits
 ```
 
 `OverwriteFilter` is `k.OverwriteFilters()`; `RejectFilter` is `k.ReadFilter` (which

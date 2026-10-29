@@ -38,8 +38,7 @@
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",
         "tag_limits": "invalid: {detail}"
-      },
-      "shape": false
+      }
     },
     "37802": {
       "description": "Associated account backup event",
@@ -76,8 +75,7 @@
         "p_tag": "invalid: p tag requirement not met",
         "rate_limited": "rate-limited: rate limit exceeded for this kind",
         "tag_limits": "invalid: {detail}"
-      },
-      "shape": false
+      }
     },
     "5": {
       "description": "NIP-09 deletion requests",
@@ -104,8 +102,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": true
+      "errors": {}
     }
   },
   "filters": {"reject_empty": true, "reject_search": true},

@@ -30,8 +30,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": false
+      "errors": {}
     },
     "37802": {
       "description": "Associated account backup event",
@@ -60,8 +59,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": false
+      "errors": {}
     },
     "5": {
       "description": "NIP-09 deletion requests",
@@ -88,8 +86,7 @@
         {"scope": "ip", "limit": 60, "window": "1h"},
         {"scope": "ip", "limit": 400, "window": "1d"}
       ],
-      "errors": {},
-      "shape": true
+      "errors": {}
     }
   },
   "filters": {"reject_empty": true, "reject_search": true},

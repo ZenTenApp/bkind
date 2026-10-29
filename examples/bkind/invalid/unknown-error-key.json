@@ -3,7 +3,8 @@
     "4": {
       "errors": {
         "nope": "x"
-      }
+      },
+      "description": "a rule with a rejection key that does not exist"
     }
   }
 }

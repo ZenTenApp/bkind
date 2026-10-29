@@ -117,7 +117,6 @@ var errorMessageKeys = map[string]bool{
 	"max_event_content_size": true,
 	"tag_limits":             true,
 	"rate_limited":           true,
-	"shape":                  true,
 }
 
 // render fills the {placeholders} of a custom rejection message: "blocked: event
@@ -406,12 +405,11 @@ func (r *KindRule) tagLimitsCheck() eventCheck {
 }
 
 // shapeCheck runs the registered structural validator for this kind, such as
-// ValidateKind4Shape. The validators are Go functions in the registry because a
-// JSON document cannot carry code; the rule decides only whether it runs.
+// ValidateKind4Shape. It is not a setting and cannot be switched off: a kind with
+// a validator is always checked, and a kind without one has nothing to check. The
+// validators are Go functions in the registry because a JSON document cannot
+// carry code.
 func (r *KindRule) shapeCheck(kind uint16) eventCheck {
-	if !r.Shape {
-		return nil
-	}
 	validator := ShapeValidator(kind)
 	if validator == nil {
 		return nil

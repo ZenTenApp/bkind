@@ -1,7 +1,6 @@
 {
   "kinds": {
     "whitelist": [
-      4,
       37801
     ]
   },
@@ -9,7 +8,8 @@
     "37801": {
       "tag_patterns": {
         "d": "["
-      }
+      },
+      "description": "addressable backup event"
     }
   }
 }

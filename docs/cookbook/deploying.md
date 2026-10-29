@@ -131,7 +131,7 @@ sudo editor /etc/bkind/bkind.env
 
 Flags win over environment variables, so `bkind -db /tmp/x` overrides the file.
 
-Rate limits, the kind visibility classes and the per-kind shape validators are
+Rate limits, the kind visibility classes and the per-kind structural validators are
 structured, so they are not environment variables: put them in the JSON policy file
 named by `BKIND_CONFIG` (or inline in `BKIND_CONFIG_JSON`). Both are the same
 document, and [Configuring a relay](./configuration.md) is the reference: the file is

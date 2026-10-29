@@ -33,8 +33,7 @@ document.
         {"scope": "npub", "limit": 30, "window": "1h"},
         {"scope": "ip", "limit": 60, "window": "1h"}
       ],
-      "errors": {},
-      "shape": true
+      "errors": {}
     },
     "5":  {"description": "NIP-09 deletion requests", "...": "spelled out like kind 4, p_tag empty"},
     "62": {"description": "NIP-62 vanish requests", "...": "spelled out like kind 4, p_tag empty"}
@@ -84,7 +83,6 @@ fault each, so every failure message can be tried by hand:
 | `bad-regex.json` | `tag_patterns.d: "["` |
 | `unserved-rule.json` | a rule for kind 7 when the whitelist is `[4]` |
 | `ephemeral-kind.json` | kind 20001 whitelisted without `allow_ephemeral` |
-| `missing-shape-validator.json` | `shape: true` on 1059, which has none |
 | `bad-scope.json` | a `connection_limits` entry keyed by `npub` |
 | `unknown-error-key.json` | an `errors` key that is not a rejection |
 | `gate-conflict.json` | `rules.4.read.allow: ["*", <pubkey>]` |
@@ -136,10 +134,10 @@ consequences are deliberate:
   {"max_event_content_size": 512}}}` gives kind 4 exactly one setting: no write
   gate, no tags, no limits. To change one setting of a kind, copy its whole rule
   and change the line.
-- **`null` deletes.** `{"rules": {"4": null}}` removes kind 4's rule; the kind
-  stays whitelisted and is served with the empty rule — nobody may publish it and
-  nobody may read it. Silence means "leave it alone"; `null` means "make it say
-  nothing".
+- **`null` deletes.** `{"rules": {"5": null}, "kinds": {"whitelist": [4, 62]}}`
+  removes kind 5's rule as kind 5 leaves the whitelist. Silence means "leave it
+  alone"; `null` means "make it say nothing" — and a served kind cannot say
+  nothing, so `null` on a kind the document keeps whitelisted is an error.
 
 Start a file from the binary's own output, so it cannot be missing a section:
 
@@ -176,20 +174,24 @@ meaning — never "somebody else's number":
 | `tag_limits` all zero | no tag-budget check |
 | `tag_patterns`, `required_tags`, `rate_limits`, `errors` empty | none |
 | `p_tag` `""` | no `p` rule |
-| `require_auth`, `read.privileged`, `shape` `false` | off |
+| `require_auth`, `read.privileged` `false` | off |
 | **`write.allow` / `read.allow` empty** | **nobody** — `"*"` is the word for anyone |
 
 The empty allow list is the one worth reading twice: `[]` means nobody, and only
 the literal `"*"` means anyone. It is what the printed document shows, and `[]`
 has to mean what it looks like.
 
-A whitelisted kind with no rule at all is served with the empty rule: nobody may
-publish it and nobody may read it. That is the safe reading of "the document said
-nothing", and it is a state the relay starts in rather than a hole it falls into.
+Every served kind needs a rule, and every rule needs a description. A whitelist
+entry with no rule is a startup error: a kind that says nothing about itself is
+not a kind this relay knows how to serve. The one kind of exception is an
+ephemeral kind admitted by `allow_ephemeral` — it was never in the whitelist, so
+it has no rule, and it is written to without checks and never answered on read.
 
-`shape` runs a validator registered for one specific kind (`policies/kinds.go`).
-A document cannot carry code, only the switch for it, so the switch is per rule
-and there is nowhere else for it to live.
+The structural validator of a kind is not a setting at all. It runs whenever one
+is registered for that kind (`policies/kinds.go`), so a relay cannot serve a kind
+it does not know how to check, and a document cannot switch the check off. The
+validators are Go functions because a document cannot carry code; the cost is
+that a kind with no registered validator is served with no structural check.
 
 `errors` is a per-kind table too, so one kind can reword its rejections without
 touching another kind's.
@@ -206,7 +208,7 @@ appears.
 
 | Field | Zero value | Meaning |
 |---|---|---|
-| `description` | `""` | operator documentation; not sent anywhere — a rule only, it has no default |
+| `description` | **required** | one sentence saying what the kind is; not sent anywhere, but a rule without it is a startup error |
 | `write.allow` | nobody | `"*"` for anyone, or a list of the only pubkeys that may publish this kind |
 | `read.allow` | nobody | `"*"` for anyone, or a list of the only pubkeys that may query this kind |
 | `read.privileged` | public | author-only (or author + `p` recipient) reads; see below |
@@ -221,7 +223,6 @@ appears.
 | `tag_patterns` | none | tag name → regular expression every value of that tag must match |
 | `tag_limits` | none | `max_tags`, `max_tag_name_chars`, `max_tag_value_chars`. A `max_tags` smaller than the tags the rule demands (`required_tags` plus `p_tag`) is a startup error — it would reject every event |
 | `rate_limits` | none | write limits for this kind: `{scope, limit, window}` |
-| `shape` | off | run the registered structural validator for this kind (registry in `policies/kinds.go`); it is per rule, because a validator belongs to one kind |
 | `errors` | built-ins | rejection message templates, see below |
 
 Durations accept three notations, everywhere: a bare number is seconds
@@ -309,7 +310,6 @@ are stable; the built-in wording may change between versions, the keys do not.
 | `max_event_content_size` | oversized content | `{size}`, `{limit}` |
 | `tag_limits` | too many tags, or a name/value too long | — |
 | `rate_limited` | the write limits of the kind | — |
-| `shape` | the structural validator | — |
 
 `{detail}` is always available and carries the built-in message, so a template
 can wrap the specific reason instead of replacing it with a generic one:
@@ -457,10 +457,10 @@ process settings:
   `SetExpirationInterval`);
 - `ServiceURL`, the HTTP server and the sweep interval — flags and `BKIND_*`,
   not the policy file (`examples/bkind/main.go`);
-- the shape validators themselves, `policies/kinds.go` — a rule turns its
-  kind's validator on or off, but the checks are code, because a JSON document
-  cannot carry code. Naming `shape: true` for a kind with no registered
-  validator is a startup error;
+- the structural validators themselves, `policies/kinds.go` — they are code,
+  because a JSON document cannot carry code, and they always run for the kinds
+  that have one. Serving a kind with no registered validator is possible, and
+  means serving it without a structural check;
 - `require_auth` is on or off per kind; the rule "author equals the authenticated
   key" cannot be replaced by "author is any key" from a file. A relay that
   needs that writes its own `RejectEvent` policy instead.
@@ -471,8 +471,11 @@ process settings:
 WhatItNames`: a named section and a named rule replace what came before, unnamed
 ones stay, and a whitelist change prunes), that rules do not inherit
 (`TestRulesDoNotInherit`: two kinds with unrelated policies, both honoured by the
-relay), the empty rule (`TestUnruledKindIsTheEmptyRule`: an unruled kind lets
-nobody publish or read, and giving it a rule opens it), every duration and size
+relay), the rule requirement (`TestEveryServedKindNeedsARule`: a whitelisted kind
+without a rule is refused, and an ephemeral kind admitted by `allow_ephemeral` is
+the documented exception), that the structural validator is not a setting
+(`TestShapeIsNotASetting`: `shape` is an unknown field and the registered
+validator runs anyway), every duration and size
 notation, the one-spelling rule (every old summary name refused as an unknown
 field), the validation errors, allow lists on both sides (including `[]` meaning
 nobody), the age window, tag patterns, error templates, per-kind differences (one
