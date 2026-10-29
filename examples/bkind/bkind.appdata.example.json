@@ -1,19 +1,169 @@
 {
-  "kind": {
-    "whitelist": [5, 37801, 37802]
-  },
-  "rules": {
-    "37801": {
-      "description": "Master account backup event",
-      "privileged": true,
-      "size_limit": 4096,
-      "identifier_regex": "^vaultkey$"
+  "5": {
+    "description": "NIP-09 deletion requests",
+    "write": {
+      "allow": [
+        "*"
+      ]
     },
-    "37802": {
-      "description": "Associated account backup event",
-      "privileged": true,
-      "size_limit": 4096,
-      "identifier_regex": "^[0-9]{16}$"
-    }
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "75h",
+    "max_age_of_event": "0s",
+    "max_age_event_in_future": "0s",
+    "required_tags": [
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {},
+    "tag_limits": {
+      "max_tags": 16,
+      "max_tag_name_chars": 64,
+      "max_tag_value_chars": 256
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 30,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 200,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 60,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 400,
+        "window": "1d"
+      }
+    ],
+    "errors": {}
+  },
+  "37801": {
+    "description": "Master account backup event",
+    "write": {
+      "allow": [
+        "*"
+      ]
+    },
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "75h",
+    "max_age_of_event": "0s",
+    "max_age_event_in_future": "0s",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "d": "^vaultkey$",
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 16,
+      "max_tag_name_chars": 64,
+      "max_tag_value_chars": 256
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 30,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 200,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 60,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 400,
+        "window": "1d"
+      }
+    ],
+    "errors": {}
+  },
+  "37802": {
+    "description": "Associated account backup event",
+    "write": {
+      "allow": [
+        "*"
+      ]
+    },
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "75h",
+    "max_age_of_event": "0s",
+    "max_age_event_in_future": "0s",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "d": "^[0-9]{16}$",
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 16,
+      "max_tag_name_chars": 64,
+      "max_tag_value_chars": 256
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 30,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 200,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 60,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 400,
+        "window": "1d"
+      }
+    ],
+    "errors": {}
   }
 }

@@ -1,15 +1,8 @@
 {
-  "kinds": {
-    "whitelist": [
-      4,
-      37801
-    ]
-  },
-  "rules": {
-    "37801": {
-      "tag_patterns": {
-        "d": "["
-      }
+  "37801": {
+    "description": "addressable backup event",
+    "tag_patterns": {
+      "d": "["
     }
   }
 }

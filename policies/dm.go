@@ -2,6 +2,7 @@ package policies
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -120,6 +121,30 @@ func MaxContentLen(max int) func(context.Context, *nostr.Event) (bool, string) {
 	return func(ctx context.Context, evt *nostr.Event) (bool, string) {
 		if len(evt.Content) > max {
 			return true, fmt.Sprintf("invalid: content is too large (%d bytes, max %d)", len(evt.Content), max)
+		}
+		return false, ""
+	}
+}
+
+// EventLen is the size in bytes of the event as a client sends it: the JSON of
+// the event itself, id, signature and tags included, without the ["EVENT", ...]
+// envelope. It is what max_event_size bounds; max_event_content_size bounds the
+// content alone.
+func EventLen(evt *nostr.Event) int {
+	encoded, err := json.Marshal(evt)
+	if err != nil {
+		// an event that cannot be encoded carries no meaningful size; the id and
+		// signature gates refuse it
+		return 0
+	}
+	return len(encoded)
+}
+
+// MaxEventLen rejects events whose serialized form is longer than max bytes.
+func MaxEventLen(max int) func(context.Context, *nostr.Event) (bool, string) {
+	return func(ctx context.Context, evt *nostr.Event) (bool, string) {
+		if size := EventLen(evt); size > max {
+			return true, fmt.Sprintf("invalid: event is too large (%d bytes, max %d)", size, max)
 		}
 		return false, ""
 	}

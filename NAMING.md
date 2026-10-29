@@ -51,7 +51,7 @@ orphans an operator's config, logs, unit file or volume.
 
 | Surface | Value | Why frozen |
 |---|---|---|
-| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_CONFIG`, `BKIND_CONFIG_JSON`, `BKIND_CONFIG_STRICT`, `BKIND_KINDS`, `BKIND_NAME`, `BKIND_DESCRIPTION` | an operator's `.env` and systemd `EnvironmentFile` |
+| Env vars | `BKIND_ADDR`, `BKIND_URL`, `BKIND_DB`, `BKIND_SWEEP_INTERVAL`, `BKIND_CONFIG`, `BKIND_CONFIG_JSON`, `BKIND_KINDS`, `BKIND_NAME`, `BKIND_DESCRIPTION` | an operator's `.env` and systemd `EnvironmentFile` |
 | Log prefix | `[bkind]` | what people grep in journals |
 | systemd unit | `bkind.service` | `systemctl` name in every runbook |
 | Config dir | `/etc/bkind/` | |
@@ -107,7 +107,7 @@ the protocol:
 
 | Label | Location |
 |---|---|
-| NIP-11 `name` / `description` | `policies.Config.NIP11`, defaulted in `policies.DefaultConfig()`, derived from the kind list when the description is empty |
+| NIP-11 `name` / `description` | `policies.Settings.NIP11`, defaulted in Go, set by `-name` / `-description`; the description is derived from the kind list when empty |
 | NIP-11 `software` / `version` defaults | `relay.go`, `NewRelay()` — currently the upstream URL and `"n/a"`; the product overrides these later |
 | Log prefix default | `relay.go` (`[khatru-relay]` until the module rename), overridden by the product |
 | Env var names | `policies.LoadConfig` / `ApplyEnv` (`policies/config.go`), plus `envOr(...)` in `examples/bkind/main.go` for the process settings |

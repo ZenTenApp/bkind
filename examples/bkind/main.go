@@ -37,10 +37,9 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip40"
 )
 
-// Limits of the relay. The defaults live in policies.DefaultConfig; these are the
-// ones the process itself needs and that are not part of the policy set.
 // defaultSweepInterval is the only process setting that is not part of the policy
-// set.
+// set: the policy set itself lives in policies/default.json, embedded at build
+// time, and everything else about the relay is that document.
 const defaultSweepInterval = 5 * time.Minute
 
 type config struct {
@@ -56,10 +55,10 @@ func main() {
 	cfg := parseConfig()
 
 	if cfg.printConfig {
-		// the effective policy set, after defaults, file, environment and flags. It
-		// is the canonical document: feeding it back through BKIND_CONFIG_STRICT
-		// reproduces exactly this configuration, which is what makes an explicit
-		// file reviewable instead of aspirational.
+		// the effective policy set, after the embedded document, the file, the
+		// environment and the flags. It is the canonical document: feeding it back
+		// through BKIND_CONFIG reproduces exactly this configuration, which is what
+		// makes the file reviewable instead of aspirational.
 		document, err := cfg.policies.JSON()
 		if err != nil {
 			log.Fatalf("failed to render the configuration: %v", err)
@@ -84,8 +83,8 @@ func main() {
 	defer stop()
 
 	retention := "no expiration policy"
-	for _, rule := range cfg.policies.EffectiveRules() {
-		if rule != nil && slices.Contains(rule.RequiredTags, "expiration") {
+	for _, rule := range cfg.policies.RulesByKind() {
+		if slices.Contains(rule.RequiredTags, "expiration") {
 			retention = fmt.Sprintf("mandatory NIP-40 expiration (max %s)", rule.MaxExpiration)
 			break
 		}
@@ -93,7 +92,7 @@ func main() {
 
 	go func() {
 		log.Printf("listening on %s, serving %s (kinds %s, %s)",
-			cfg.addr, cfg.serviceURL, kindList(cfg.policies.Kinds.Whitelist), retention)
+			cfg.addr, cfg.serviceURL, kindList(cfg.policies.KindNumbers()), retention)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server failed: %v", err)
 		}
@@ -113,7 +112,8 @@ func main() {
 }
 
 func parseConfig() config {
-	// defaults, then BKIND_CONFIG / BKIND_CONFIG_JSON, then BKIND_KINDS, validated
+	// the embedded document, then BKIND_CONFIG / BKIND_CONFIG_JSON, then
+	// BKIND_KINDS, validated at every step
 	policySet, err := policies.LoadConfig(os.LookupEnv)
 	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
@@ -123,9 +123,9 @@ func parseConfig() config {
 	serviceURL := envOr("BKIND_URL", "")
 	dbPath := envOr("BKIND_DB", "")
 	sweepInterval := envOr("BKIND_SWEEP_INTERVAL", defaultSweepInterval.String())
-	kinds := strings.Join(kindListInts(policySet.Kinds.Whitelist), ",")
-	nip11Name := policySet.NIP11.Name
-	nip11Description := policySet.NIP11.Description
+	kinds := strings.Join(kindListInts(policySet.KindNumbers()), ",")
+	nip11Name := policySet.Settings.NIP11.Name
+	nip11Description := policySet.Settings.NIP11.Description
 	printConfig := false
 
 	flag.StringVar(&addr, "addr", addr, "address to listen on")
@@ -156,8 +156,8 @@ func parseConfig() config {
 		log.Fatalf("invalid -kinds: %v", err)
 	}
 	cfg.policies.SetKinds(parsedKinds)
-	cfg.policies.NIP11.Name = nip11Name
-	cfg.policies.NIP11.Description = nip11Description
+	cfg.policies.Settings.NIP11.Name = nip11Name
+	cfg.policies.Settings.NIP11.Description = nip11Description
 
 	// re-validate: a flag can break an invariant the environment respected
 	if err := cfg.policies.Validate(); err != nil {
@@ -173,13 +173,14 @@ func newRelay(cfg config) (*bkind.Relay, func(), error) {
 	relay := bkind.NewRelay()
 	relay.ServiceURL = cfg.serviceURL
 	// the frame limit is only a backstop, and it is advertised, so it comes from the
-	// same field: the real limit on a message is policies.MaxContentLen, which NAKs
-	// instead of closing the connection
-	relay.MaxMessageSize = int64(cfg.policies.NIP11.MaxMessageLength)
+	// same field: the limits on a message are the per-kind policies
+	// (policies.MaxContentLen and policies.MaxEventLen), which NAK instead of
+	// closing the connection
+	relay.MaxMessageSize = int64(cfg.policies.Settings.NIP11.MaxMessageLength)
 	relay.SetExpirationInterval(cfg.sweepInterval)
 
 	closer := func() {}
-	store, err := openStore(cfg.dbPath, cfg.policies.NIP11.MaxLimit)
+	store, err := openStore(cfg.dbPath, cfg.policies.Settings.NIP11.MaxLimit)
 	if err != nil {
 		return nil, nil, err
 	}

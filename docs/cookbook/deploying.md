@@ -125,25 +125,24 @@ sudo editor /etc/bkind/bkind.env
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | expired-event sweep period |
 | `BKIND_CONFIG` | — | empty | JSON policy file, keyed by kind; see [Configuring a relay](./configuration.md) |
 | `BKIND_CONFIG_JSON` | — | empty | the same document inline |
-| `BKIND_CONFIG_STRICT` | — | `false` | require every field in the policy file |
 | `BKIND_KINDS` | `-kinds` | `4,5,62` | kinds the relay serves; drops the rules of kinds it leaves out |
 | `BKIND_NAME` | `-name` | `B Kind` | relay name in the NIP-11 document |
 | `BKIND_DESCRIPTION` | `-description` | derived | description in the NIP-11 document |
 
 Flags win over environment variables, so `bkind -db /tmp/x` overrides the file.
 
-Rate limits, the kind visibility classes and the per-kind shape validators are
+Rate limits, the kind visibility classes and the per-kind structural validators are
 structured, so they are not environment variables: put them in the JSON policy file
 named by `BKIND_CONFIG` (or inline in `BKIND_CONFIG_JSON`). Both are the same
 document, and [Configuring a relay](./configuration.md) is the reference: the file is
 validated at startup, and a rate limit that cannot be satisfied is a startup error
 rather than a surprise in production.
 
-### If you want the configuration to be explicit
+### Pinning the policy file
 
-The three variables above rely on the binary's defaults for everything else. If you
-would rather have one reviewable file that says what the relay does — and fails to start
-if a field goes missing — generate it from the binary itself and pin it:
+The binary carries its policy set as a document (`policies/default.json`), so a relay
+with no configuration at all still works. If you would rather have one reviewable file
+that says what the relay does, generate it from the binary itself and pin it:
 
 ```sh
 sudo -u bkind env $(grep -v '^#' /etc/bkind/bkind.env | xargs) \
@@ -151,18 +150,18 @@ sudo -u bkind env $(grep -v '^#' /etc/bkind/bkind.env | xargs) \
 sudo chmod 0640 /etc/bkind/bkind.json
 ```
 
-`-print-config` prints the effective policy set — defaults, then file, then environment,
-then flags — in the canonical document form, and exits without touching the store. Add
-these two lines to `/etc/bkind/bkind.env`:
+`-print-config` prints the effective policy set — embedded document, then file, then
+environment, then flags — in the canonical document form, and exits without touching the
+store. Add this line to `/etc/bkind/bkind.env`:
 
 ```sh
 BKIND_CONFIG=/etc/bkind/bkind.json
-BKIND_CONFIG_STRICT=true
 ```
 
-From then on a field deleted from the file is a startup error naming that field, not a
-silent fallback to a default that may have moved. To re-baseline after an upgrade,
-regenerate the file and review the diff — that diff is the whole point of the exercise.
+From then on the file is the policy: a section it does not name keeps whatever the
+embedded document said, and a rule it names replaces that kind's rule in full. To
+re-baseline after an upgrade, regenerate the file and review the diff — that diff is the
+whole point of the exercise.
 
 The defaults are the reference relay and they already satisfy every rule in
 [the spec](./dm-only-relay.md): kinds `4,5,62`, no ephemeral kinds, 75h expiration,
@@ -493,7 +492,7 @@ Scale up, not out.
 | `auth-required` forever, even with `--auth` | `BKIND_URL` does not match the URL the client uses (scheme, host, trailing path) |
 | Client sees `restricted: events of this kind are only visible...` | the client's filter does not pin `authors` or `#p` to its own pubkey |
 | Client sees `restricted: kind 7 is not served by this relay` | the client is talking to a DM relay; `kinds.reject_unserved_filters` is `true`, so a filter for an unserved kind is refused rather than emptied |
-| Connection closes with code 1009 | the frame exceeded `nip11.max_message_length` (12KB by default); content is capped at the kind's `max_size` (4KB), so this is usually a client sending something else |
+| Connection closes with code 1009 | the frame exceeded `nip11.max_message_length` (12KB by default); content is capped at the kind's `max_event_content_size` (4KB), so this is usually a client sending something else |
 | Service refuses to start with `invalid configuration:` | a policy file or `BKIND_*` variable failed validation; the message names the field, and the unit log has it verbatim |
 | `failed to open the database ... lock` | another `bkind` process already has the directory open |
 | Service starts then exits `status=1` | run `/usr/local/bin/bkind` by hand with the same environment file to see the error |

@@ -17,17 +17,24 @@ import (
 type eventCheck func(context.Context, *nostr.Event) (bool, string)
 
 // AllowList is who may do a thing: "*" for anyone, or an explicit list of
-// pubkeys. An absent or empty list means anyone, so a rule that only says what
-// is limited does not have to repeat "and everyone may try".
+// pubkeys. An empty list means nobody: the wildcard is a word a document has to
+// write, so "nobody" and "everybody" can never be the same value. That matters
+// because the printed document shows an empty list as [], and [] must mean what
+// it looks like.
 type AllowList []string
 
-// Anyone reports whether the list is open: no list, or the "*" wildcard.
+// Anyone reports whether the list is the wildcard: exactly "*".
 func (g AllowList) Anyone() bool {
-	return len(g) == 0 || (len(g) == 1 && g[0] == "*")
+	return len(g) == 1 && g[0] == "*"
 }
 
-// Includes reports whether pubkey passes the list. An open list includes
-// everyone.
+// Nobody reports whether the list excludes everyone.
+func (g AllowList) Nobody() bool {
+	return len(g) == 0
+}
+
+// Includes reports whether pubkey passes the list. Only the wildcard includes
+// everyone; an empty list includes no one.
 func (g AllowList) Includes(pubkey string) bool {
 	return g.Anyone() || slices.Contains(g, pubkey)
 }
@@ -49,7 +56,7 @@ func (g *AllowList) UnmarshalJSON(data []byte) error {
 	}
 
 	var keys []string
-	if err := strictUnmarshal(data, &keys); err != nil {
+	if err := json.Unmarshal(data, &keys); err != nil {
 		return fmt.Errorf("allow must be \"*\" or a list of pubkeys: %w", err)
 	}
 	*g = keys
@@ -94,30 +101,21 @@ type RateLimit struct {
 	Window Duration `json:"window"`
 }
 
-// strictUnmarshal decodes with unknown fields refused, so a typo inside a
-// nested rule object is an error like a typo anywhere else.
-func strictUnmarshal(data []byte, v any) error {
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
-}
-
 // errorMessageKeys are the rejection templates a kind rule can override. The
 // keys are stable API: a client can rely on the default wording changing
 // between versions, but not on which rejections exist.
 var errorMessageKeys = map[string]bool{
-	"write_denied":  true,
-	"auth_required": true,
-	"too_old":       true,
-	"in_future":     true,
-	"expiration":    true,
-	"missing_tag":   true,
-	"p_tag":         true,
-	"tag_pattern":   true,
-	"max_size":      true,
-	"tag_limits":    true,
-	"rate_limited":  true,
-	"shape":         true,
+	"write_denied":           true,
+	"auth_required":          true,
+	"too_old":                true,
+	"in_future":              true,
+	"expiration":             true,
+	"missing_tag":            true,
+	"tag_pattern":            true,
+	"max_event_size":         true,
+	"max_event_content_size": true,
+	"tag_limits":             true,
+	"rate_limited":           true,
 }
 
 // render fills the {placeholders} of a custom rejection message: "blocked: event
@@ -284,35 +282,6 @@ func (r *KindRule) requiredTagChecks() (out []eventCheck) {
 	return out
 }
 
-// pTagCheck enforces the "p" tag of a direct-message kind: exactly one, a valid
-// pubkey, and not the author. It is what makes a privileged kind
-// recipient-visible.
-func (r *KindRule) pTagCheck() eventCheck {
-	if r.PTag != "hex" {
-		return nil
-	}
-	inner := func(_ context.Context, evt *nostr.Event) (bool, string) {
-		count := 0
-		for _, tag := range evt.Tags {
-			if len(tag) == 0 || tag[0] != "p" {
-				continue
-			}
-			count++
-			if len(tag) < 2 || !nostr.IsValidPublicKey(tag[1]) {
-				return true, `invalid: "p" tag must be a 64-character hex pubkey`
-			}
-			if tag[1] == evt.PubKey {
-				return true, `invalid: events of this kind cannot be addressed to their own author`
-			}
-		}
-		if count != 1 {
-			return true, `invalid: events of this kind must have exactly one "p" tag`
-		}
-		return false, ""
-	}
-	return r.withTemplate("p_tag", inner, func(*nostr.Event) map[string]string { return nil })
-}
-
 // tagPatternCheck enforces the per-tag regular expressions: a "d" pattern of
 // "^[0-9]{16}$" means every "d" tag value must match. Whether the tag must be
 // present at all is required_tags' job; a pattern only bounds the values.
@@ -364,14 +333,30 @@ func (r *KindRule) tagPatternCheck() eventCheck {
 	})
 }
 
-// maxSizeCheck is the content limit of this kind, in bytes of content.
-func (r *KindRule) maxSizeCheck() eventCheck {
-	if r.MaxSize.Bytes <= 0 {
+// maxEventSizeCheck is the whole-event limit of this kind: the event as it
+// would go on the wire, id, signature and tags included.
+func (r *KindRule) maxEventSizeCheck() eventCheck {
+	if r.MaxEventSize.Bytes <= 0 {
 		return nil
 	}
-	limit := r.MaxSize.Bytes
+	limit := r.MaxEventSize.Bytes
+	inner := MaxEventLen(limit)
+	return r.withTemplate("max_event_size", inner, func(evt *nostr.Event) map[string]string {
+		return map[string]string{
+			"size":  strconv.Itoa(EventLen(evt)),
+			"limit": strconv.Itoa(limit),
+		}
+	})
+}
+
+// contentSizeCheck is the content limit of this kind, in bytes of content.
+func (r *KindRule) contentSizeCheck() eventCheck {
+	if r.MaxEventContentSize.Bytes <= 0 {
+		return nil
+	}
+	limit := r.MaxEventContentSize.Bytes
 	inner := MaxContentLen(limit)
-	return r.withTemplate("max_size", inner, func(evt *nostr.Event) map[string]string {
+	return r.withTemplate("max_event_content_size", inner, func(evt *nostr.Event) map[string]string {
 		return map[string]string{
 			"size":  strconv.Itoa(len(evt.Content)),
 			"limit": strconv.Itoa(limit),
@@ -390,12 +375,11 @@ func (r *KindRule) tagLimitsCheck() eventCheck {
 }
 
 // shapeCheck runs the registered structural validator for this kind, such as
-// ValidateKind4Shape. The validators are Go functions in the registry because a
-// JSON document cannot carry code; the rule decides only whether it runs.
+// ValidateKind4Shape. It is not a setting and cannot be switched off: a kind with
+// a validator is always checked, and a kind without one has nothing to check. The
+// validators are Go functions in the registry because a JSON document cannot
+// carry code.
 func (r *KindRule) shapeCheck(kind uint16) eventCheck {
-	if !r.Shape {
-		return nil
-	}
 	validator := ShapeValidator(kind)
 	if validator == nil {
 		return nil
@@ -443,13 +427,13 @@ func (r *KindRule) checks(kind uint16) []eventCheck {
 	if check := r.tagPatternCheck(); check != nil {
 		out = append(out, check)
 	}
-	if check := r.maxSizeCheck(); check != nil {
+	if check := r.maxEventSizeCheck(); check != nil {
+		out = append(out, check)
+	}
+	if check := r.contentSizeCheck(); check != nil {
 		out = append(out, check)
 	}
 	if check := r.tagLimitsCheck(); check != nil {
-		out = append(out, check)
-	}
-	if check := r.pTagCheck(); check != nil {
 		out = append(out, check)
 	}
 	if check := r.shapeCheck(kind); check != nil {

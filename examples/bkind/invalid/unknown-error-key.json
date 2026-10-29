@@ -1,9 +1,8 @@
 {
-  "rules": {
-    "4": {
-      "errors": {
-        "nope": "x"
-      }
+  "4": {
+    "description": "a rule with a rejection key that does not exist",
+    "errors": {
+      "nope": "x"
     }
   }
 }

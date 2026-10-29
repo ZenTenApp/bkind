@@ -99,12 +99,11 @@ func newRelayWithConfig(t *testing.T, serviceURL string, mutate func(*policies.C
 
 	cfg := policies.DefaultConfig()
 	// the tests speak far faster than the production limits allow
-	cfg.RateLimits = nil
 	for _, rule := range cfg.Rules {
 		rule.RateLimits = nil
 	}
-	cfg.ReadLimits = nil
-	cfg.ConnectionLimits = nil
+	cfg.Settings.ReadLimits = nil
+	cfg.Settings.ConnectionLimits = nil
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -479,7 +478,7 @@ func TestBKindWriteRules(t *testing.T) {
 				evt.Sign(alice.sk)
 				return evt
 			},
-			reason: `exactly one "p" tag`,
+			reason: `multiple "p" tags`,
 		},
 		{
 			name: "references another event",
@@ -499,7 +498,7 @@ func TestBKindWriteRules(t *testing.T) {
 				evt.Sign(alice.sk)
 				return evt
 			},
-			reason: "cannot be addressed to their own author",
+			reason: "cannot be addressed to its own author",
 		},
 		{
 			name: "deletion without targets",
@@ -915,9 +914,8 @@ func TestBKindExpirationSweepOnStartup(t *testing.T) {
 // a reason the client can act on instead of returning a silent empty EOSE.
 func TestBKindKindsAreConfigurable(t *testing.T) {
 	relay, _ := newRelayWithConfig(t, "", func(c *policies.Config) {
-		c.Kinds.Whitelist = []uint16{4, 5, 62, 1}
 		// a public note kind: a rule with no restrictions, which is a choice the
-		// per-kind dialect makes explicit
+		// document makes explicit, and the rule is what serves the kind
 		c.Rules["1"] = &policies.KindRule{
 			Description: "public notes",
 			RuleSettings: policies.RuleSettings{
@@ -968,18 +966,15 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay.json")
 	if err := os.WriteFile(path, []byte(`{
-		"kinds": {"whitelist": [4]},
-		"rules": {
-			"4": {
-				"write": {"allow": "*"},
-				"read": {"allow": "*", "privileged": true},
-				"require_auth": true,
-				"max_size": 64,
-				"tag_limits": {"max_tags": 8, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
-				"required_tags": ["expiration", "client"],
-				"p_tag": "hex",
-				"shape": true
-			}
+		"4": {
+			"description": "NIP-04 direct messages, from a file",
+			"write": {"allow": "*"},
+			"read": {"allow": "*", "privileged": true},
+			"require_auth": true,
+			"max_event_content_size": 64,
+			"tag_limits": {"max_tags": 8, "max_tag_name_chars": 64, "max_tag_value_chars": 256},
+			"required_tags": ["p", "expiration", "client"],
+			"tag_patterns": {"p": "^[0-9a-f]{64}$"}
 		}
 	}`), 0o600); err != nil {
 		t.Fatal(err)

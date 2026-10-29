@@ -1,25 +1,114 @@
 {
-  "kind": {
-    "whitelist": [4, 1059]
-  },
-  "rules": {
-    "4": {
-      "description": "Nostr DM events",
-      "privileged": true,
-      "size_limit": 4096,
-      "max_age_of_event": 3600,
-      "max_age_event_in_future": 60,
-      "max_expiry_duration": "P3D",
-      "must_have_tags": ["p", "expiration", "client"]
+  "4": {
+    "description": "Nostr DM events",
+    "write": {
+      "allow": [
+        "*"
+      ]
     },
-    "1059": {
-      "description": "Private Direct Message",
-      "privileged": true,
-      "size_limit": 4096,
-      "max_age_of_event": 172800,
-      "max_age_event_in_future": 60,
-      "max_expiry_duration": "P3D",
-      "must_have_tags": ["p", "expiration", "client"]
-    }
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "3d",
+    "max_age_of_event": "1h",
+    "max_age_event_in_future": "1m",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 16,
+      "max_tag_name_chars": 64,
+      "max_tag_value_chars": 256
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 30,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 200,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 60,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 400,
+        "window": "1d"
+      }
+    ],
+    "errors": {}
+  },
+  "1059": {
+    "description": "Private Direct Message",
+    "write": {
+      "allow": [
+        "*"
+      ]
+    },
+    "read": {
+      "allow": [
+        "*"
+      ],
+      "privileged": true
+    },
+    "require_auth": true,
+    "max_event_size": 65536,
+    "max_event_content_size": 4096,
+    "max_expiration": "3d",
+    "max_age_of_event": "2d",
+    "max_age_event_in_future": "1m",
+    "required_tags": [
+      "p",
+      "expiration",
+      "client"
+    ],
+    "tag_patterns": {
+      "p": "^[0-9a-f]{64}$"
+    },
+    "tag_limits": {
+      "max_tags": 16,
+      "max_tag_name_chars": 64,
+      "max_tag_value_chars": 256
+    },
+    "rate_limits": [
+      {
+        "scope": "npub",
+        "limit": 30,
+        "window": "1h"
+      },
+      {
+        "scope": "npub",
+        "limit": 200,
+        "window": "1d"
+      },
+      {
+        "scope": "ip",
+        "limit": 60,
+        "window": "1h"
+      },
+      {
+        "scope": "ip",
+        "limit": 400,
+        "window": "1d"
+      }
+    ],
+    "errors": {}
   }
 }
