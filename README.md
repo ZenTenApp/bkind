@@ -133,6 +133,7 @@ loads the embedded document, then a JSON file, then `BKIND_KINDS`, then flags:
 ```bash
 BKIND_CONFIG=/etc/bkind/bkind.json go run ./examples/bkind   # a file
 BKIND_KINDS=4,5,62 go run ./examples/bkind                   # variables
+BKIND_LOG_LEVEL=debug go run ./examples/bkind                # every record, badger included
 
 # your own copy of the whole document, to edit and keep in version control
 go run ./examples/bkind -print-config > bkind.json
@@ -147,6 +148,8 @@ BKIND_CONFIG=bkind.json go run ./examples/bkind
 | `BKIND_URL` | `-url` | *(empty)* | public `ws(s)://` URL; must match what clients connect to, used by NIP-42 and NIP-62 |
 | `BKIND_DB` | `-db` | *(empty)* | database directory; empty means in-memory and nothing is persisted |
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | how often expired events are deleted |
+| `BKIND_LOG_LEVEL` | `-log-level` | `info` | `debug`, `info`, `warn` or `error`; everything is written to stderr |
+| `BKIND_LOG_FORMAT` | `-log-format` | `text` | `text` for a journal or a terminal, `json` for a log shipper |
 | `BKIND_KINDS` | `-kinds` | `4,5,62` | comma-separated kinds the relay serves; drops the rules of kinds it leaves out |
 | `BKIND_NAME` | `-name` | `B Kind` | relay name in NIP-11 |
 | `BKIND_DESCRIPTION` | `-description` | *(derived)* | description in NIP-11; empty derives it from the kind list |

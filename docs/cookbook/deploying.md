@@ -108,6 +108,12 @@ BKIND_DB=/var/lib/bkind
 # how often expired events are swept out of the store
 BKIND_SWEEP_INTERVAL=5m
 
+# how much is logged, and in what shape. stderr is the only sink: journald owns the
+# file, its rotation and its retention. info writes one line at startup and one at
+# shutdown; warn silences badger's INFO lines, debug adds badger's debug records.
+BKIND_LOG_LEVEL=info
+BKIND_LOG_FORMAT=text
+
 # the policy set is the JSON document (below); the write rules live in it, per
 # kind, so that the file and the NIP-11 document cannot drift apart
 ```
@@ -123,6 +129,8 @@ sudo editor /etc/bkind/bkind.env
 | `BKIND_ADDR` | `-addr` | `:3334` | listen address |
 | `BKIND_DB` | `-db` | empty | store directory; empty means in-memory |
 | `BKIND_SWEEP_INTERVAL` | `-sweep-interval` | `5m` | expired-event sweep period |
+| `BKIND_LOG_LEVEL` | `-log-level` | `info` | `debug`, `info`, `warn` or `error`; stderr is the only sink |
+| `BKIND_LOG_FORMAT` | `-log-format` | `text` | `text` for the journal, `json` for a log shipper |
 | `BKIND_CONFIG` | — | empty | JSON policy file, keyed by kind; see [Configuring a relay](./configuration.md) |
 | `BKIND_CONFIG_JSON` | — | empty | the same document inline |
 | `BKIND_KINDS` | `-kinds` | `4,5,62` | kinds the relay serves; drops the rules of kinds it leaves out |
@@ -442,12 +450,29 @@ again. If it is gone, `BKIND_DB` is unset or not writable.
 
 ## 10. Operations
 
-**Logs.** Everything goes to the journal, including badger's INFO lines.
+**Logs.** Everything the process writes goes to stderr, which systemd sends to the
+journal: the relay's own records, its startup and shutdown lines, and badger's,
+because badger's logger is routed through the same handler. `BKIND_LOG_LEVEL`
+decides how much of that is emitted.
 
 ```sh
-journalctl -u bkind -f
+journalctl -u bkind -f                                   # at the configured level
 journalctl -u bkind --since '1 hour ago' | grep -i error
 ```
+
+At `info` (the default) a healthy relay writes one `listening` line and one
+`shutting down` line. The websocket failures — a rejected upgrade, an unexpected
+close, a failed ping — are `warn`/`error` and survive a threshold raised to `warn`.
+`BKIND_LOG_LEVEL=warn` is the quiet one, and the setting that silences badger's
+`INFO` lines; `debug` adds badger's own debug records. The relay's own lines are
+the same at `info` and `debug`: there is no per-event logging to switch on, a
+rejected event reaches the client as an `OK`/`NOTICE`, not the log. The level is
+read from the environment file, so changing it means editing
+`/etc/bkind/bkind.env` and `systemctl restart bkind`; `-log-level` overrides it for
+a single run.
+
+`BKIND_LOG_FORMAT=json` emits one JSON object per line, for a shipper. The `[bkind]`
+marker stays inside `msg` in both formats, so `grep '\[bkind\]'` keeps working.
 
 Cap the journal in `/etc/systemd/journald.conf` (`SystemMaxUse=500M`) if the box
 is small, then `sudo systemctl restart systemd-journald`.
@@ -494,7 +519,8 @@ Scale up, not out.
 | Client sees `restricted: events of this kind are only visible...` | the client's filter does not pin `authors` or `#p` to its own pubkey |
 | Client sees `restricted: kind 7 is not served by this relay` | the client is talking to a DM relay; `kinds.reject_unserved_filters` is `true`, so a filter for an unserved kind is refused rather than emptied |
 | Connection closes with code 1009 | the frame exceeded `nip11.max_message_length` (12KB by default); content is capped at the kind's `max_event_content_size` (4KB), so this is usually a client sending something else |
-| Service refuses to start with `invalid configuration:` | a policy file or `BKIND_*` variable failed validation; the message names the field, and the unit log has it verbatim |
+| Service refuses to start with `invalid configuration:` | a policy file or `BKIND_*` variable failed validation; the offending field is in the `err=` attribute of the line, verbatim |
+| Service refuses to start with `invalid log configuration` | `BKIND_LOG_LEVEL`/`-log-level` is not one of `debug`, `info`, `warn`, `error`, or `BKIND_LOG_FORMAT`/`-log-format` is not `text` or `json`; the line names the value |
 | `failed to open the database ... lock` | another `bkind` process already has the directory open |
 | Service starts then exits `status=1` | run `/usr/local/bin/bkind` by hand with the same environment file to see the error |
 | Events disappear after restart | `BKIND_DB` empty or unwritable; check `StateDirectory=`/`ReadWritePaths=` |

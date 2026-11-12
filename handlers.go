@@ -64,7 +64,9 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := rl.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		rl.Log.Printf("failed to upgrade websocket: %v\n", err)
+		// the upgrade failing is a client or proxy problem, not ours: the request never
+		// became a websocket, so there is no connection to close and nothing to retry
+		rl.log().Warn("failed to upgrade websocket", "err", err)
 		return
 	}
 
@@ -133,7 +135,7 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					websocket.CloseAbnormalClosure,  // 1006
 					4537,                            // some client seems to send many of these
 				) {
-					rl.Log.Printf("unexpected close error from %s: %v\n", GetIPFromRequest(r), err)
+					rl.log().Warn("unexpected websocket close", "client", GetIPFromRequest(r), "err", err)
 				}
 				ws.cancel()
 				return
@@ -442,7 +444,7 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				err := ws.WriteMessage(websocket.PingMessage, nil)
 				if err != nil {
 					if !strings.HasSuffix(err.Error(), "use of closed network connection") {
-						rl.Log.Printf("error writing ping: %v; closing websocket\n", err)
+						rl.log().Error("failed to write ping; closing websocket", "err", err)
 					}
 					return
 				}

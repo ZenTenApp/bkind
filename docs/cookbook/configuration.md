@@ -70,8 +70,7 @@ fault each, so every failure message can be tried by hand:
 
 ```sh
 BKIND_CONFIG=examples/bkind/invalid/tag-budget-impossible.json bkind -print-config
-# invalid configuration: rules[4]: tag_limits.max_tags is 2 but
-#   "expiration", "client" and "p" must be present, so no event could be accepted
+# time=2025/04/01 12:00:00 level=ERROR msg="[bkind] invalid configuration" err="rules[4]: tag_limits.max_tags is 2 but \"expiration\", \"client\" and \"p\" must be present, so no event could be accepted"
 ```
 
 `TestInvalidExamplesFail` runs every file there, insists on the reason rather
@@ -92,6 +91,13 @@ Each layer overrides the one before it:
 
 The result is validated before the listener starts; an invalid configuration is
 a startup error, never a relay that accepts events it cannot serve.
+
+Log settings are not part of this document and cannot be: `BKIND_LOG_LEVEL` /
+`-log-level` and `BKIND_LOG_FORMAT` / `-log-format` (see
+[the configuration table](./deploying.md#_4-configuration)) describe the process,
+not the relay, so `-print-config` never prints them and a policy file cannot set
+them. The same is true of `BKIND_ADDR`, `BKIND_DB`, `BKIND_URL` and
+`BKIND_SWEEP_INTERVAL`.
 
 JSON is parsed strictly: an unknown field anywhere — in a rule, in a gate, in a
 rate limit — is an error, so `{"4": {"contnet": ...}}` fails instead of silently
