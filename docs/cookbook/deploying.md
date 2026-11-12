@@ -464,10 +464,14 @@ At `info` (the default) a healthy relay writes one `listening` line and one
 `shutting down` line. The websocket failures — a rejected upgrade, an unexpected
 close, a failed ping — are `warn`/`error` and survive a threshold raised to `warn`.
 `BKIND_LOG_LEVEL=warn` is the quiet one, and the setting that silences badger's
-`INFO` lines; `debug` adds badger's own debug records. The relay's own lines are
-the same at `info` and `debug`: there is no per-event logging to switch on, a
-rejected event reaches the client as an `OK`/`NOTICE`, not the log. The level is
-read from the environment file, so changing it means editing
+`INFO` lines; `debug` adds badger's own debug records and one line per write policy
+rejection: `rejected event by write policy` with the event id, the kind, the pubkey
+and the reason the client was given. That is the only per-event record there is —
+accepted events, reads and filter-level rejections reach the client as an
+`OK`/`CLOSED`/`NOTICE` and nothing else, so a relay rejecting every write is visible
+at `debug` and silent at `info`. A rejection is a normal outcome of a rate limit
+rather than a fault, which is why it is not a `warn`. The level is read from the
+environment file, so changing it means editing
 `/etc/bkind/bkind.env` and `systemctl restart bkind`; `-log-level` overrides it for
 a single run.
 

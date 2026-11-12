@@ -237,8 +237,8 @@ sudo docker compose stop bkind            # drains for up to 15s, then closes th
 ```
 
 The container log is stderr, so the level and shape are the same two settings as on
-a host: `BKIND_LOG_LEVEL=debug` in `.env` for badger's debug records,
-`BKIND_LOG_FORMAT=json` if you ship the log somewhere. `docker compose logs bkind |
+a host: `BKIND_LOG_LEVEL=debug` in `.env` for badger's debug records and one line
+per rejected write, `BKIND_LOG_FORMAT=json` if you ship the log somewhere. `docker compose logs bkind |
 grep -i badger` still works: badger writes through the relay's logger, so its lines
 carry the same prefix and level, and `BKIND_LOG_LEVEL=warn` is what silences it.
 

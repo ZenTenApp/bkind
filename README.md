@@ -133,7 +133,7 @@ loads the embedded document, then a JSON file, then `BKIND_KINDS`, then flags:
 ```bash
 BKIND_CONFIG=/etc/bkind/bkind.json go run ./examples/bkind   # a file
 BKIND_KINDS=4,5,62 go run ./examples/bkind                   # variables
-BKIND_LOG_LEVEL=debug go run ./examples/bkind                # every record, badger included
+BKIND_LOG_LEVEL=debug go run ./examples/bkind                # badger records, rejected writes
 
 # your own copy of the whole document, to edit and keep in version control
 go run ./examples/bkind -print-config > bkind.json

@@ -2,11 +2,13 @@ package bkind
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,4 +135,50 @@ func TestZeroRelayLogDoesNotPanic(t *testing.T) {
 
 	rl.Logger = slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 	require.Same(t, rl.Logger, rl.log())
+}
+
+// A write policy rejection is the one outcome an operator cannot otherwise see: the
+// reason goes back to the client in its OK envelope and nowhere else. It is logged
+// at debug, so the default info log stays as quiet as it was.
+func TestRejectedWriteIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+
+	logger, err := NewLogger(&buf, slog.LevelDebug, LogFormatText)
+	require.NoError(t, err)
+
+	rl := NewRelay()
+	rl.Logger = logger
+	rl.RejectEvent = append(rl.RejectEvent, func(ctx context.Context, evt *nostr.Event) (bool, string) {
+		return true, "rate-limited: slow down"
+	})
+
+	evt := &nostr.Event{ID: "deadbeef", PubKey: "c0ffee", Kind: 4}
+	err = rl.checkEventAcceptable(context.Background(), evt)
+
+	// the client's reason is unchanged: logging is a side effect, not a rewrite
+	require.EqualError(t, err, "rate-limited: slow down")
+
+	out := buf.String()
+	require.Contains(t, out, "level=DEBUG")
+	require.Contains(t, out, `msg="[bkind] rejected event by write policy"`)
+	require.Contains(t, out, "event=deadbeef")
+	require.Contains(t, out, "kind=4")
+	require.Contains(t, out, "pubkey=c0ffee")
+	require.Contains(t, out, `reason="rate-limited: slow down"`)
+
+	// a policy that rejects without a reason still says so in both places
+	buf.Reset()
+	rl.RejectEvent = []func(ctx context.Context, evt *nostr.Event) (bool, string){
+		func(ctx context.Context, evt *nostr.Event) (bool, string) { return true, "" },
+	}
+	require.EqualError(t, rl.checkEventAcceptable(context.Background(), evt), "blocked: no reason")
+	require.Contains(t, buf.String(), `reason="blocked: no reason"`)
+
+	// at the default level the line does not exist at all
+	buf.Reset()
+	info, err := NewLogger(&buf, slog.LevelInfo, LogFormatText)
+	require.NoError(t, err)
+	rl.Logger = info
+	rl.checkEventAcceptable(context.Background(), evt)
+	require.Empty(t, buf.String(), "a rejected write must not print on the info log")
 }

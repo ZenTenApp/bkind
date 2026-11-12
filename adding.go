@@ -16,14 +16,28 @@ import (
 // on the store and must never run for an event that would be rejected afterwards.
 // Policies are only run once per event, otherwise stateful ones (the rate
 // limiters) would count the same event twice.
+//
+// A rejection is recorded at debug level before it is returned. The reason also
+// goes back to the client in its OK envelope, but that is the only other place it
+// surfaces: without this line an operator cannot tell a relay rejecting every
+// write from a relay nobody is writing to. Debug keeps a policy gate quiet by
+// default, because a rejected event is the normal outcome of a rate limit, not an
+// error worth a line on the info log.
 func (rl *Relay) checkEventAcceptable(ctx context.Context, evt *nostr.Event) error {
 	for _, reject := range rl.RejectEvent {
 		if reject, msg := reject(ctx, evt); reject {
-			if msg == "" {
-				return errors.New("blocked: no reason")
-			} else {
-				return errors.New(nostr.NormalizeOKMessage(msg, "blocked"))
+			reason := "blocked: no reason"
+			if msg != "" {
+				reason = nostr.NormalizeOKMessage(msg, "blocked")
 			}
+
+			rl.log().Debug("rejected event by write policy",
+				"event", evt.ID,
+				"kind", evt.Kind,
+				"pubkey", evt.PubKey,
+				"reason", reason)
+
+			return errors.New(reason)
 		}
 	}
 	return nil
