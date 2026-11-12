@@ -27,8 +27,8 @@ Status: implemented on branch `complex/bkind`.
 | Authentication | NIP-42 on writes and reads; write author must equal authed key |
 | Privacy | Kind 4 visible to author and `p` recipient only |
 | Tags | max 16 tags, tag name max 64 bytes, tag value max 256 bytes |
-| Kind 4 shape | exactly one `p`, 64-char hex, not the author, no `e`/`a`/`d` |
-| Kind 5 | `e` tags only, every target must be authored by the sender |
+| Recipient | exactly one `p` tag, 64-char hex, not the author (from `required_tags` + `tag_patterns`, not a shape check) |
+| Kind 5 | every target must be authored by the sender |
 | Kind 62 | self-signed, relay-scoped; deletes all author events and blocks further |
 | Rate limits | events and REQs, per npub and per ip, at 1h and 1d windows |
 | NIP-11 | advertise `{4, 5, 9, 11, 40, 42, 62}`, `auth_required`, `restricted_writes` |
@@ -136,8 +136,8 @@ existed here. `OverwriteDeletionOutcome` can still widen acceptance for someone
 else's event; it is not consulted for the author's own targets.
 
 `handleDeleteRequest` keeps support for `a` references because it is shared with
-other relays; on this one `ValidateKind5Shape` rejects `a` tags outright, since
-the allowlist has no addressable kind.
+other relays; this relay's allowlist has no addressable kind, so an `a` reference
+there is a target it cannot act on and is skipped like any other.
 
 ### Expiration now survives restarts
 
@@ -198,7 +198,6 @@ websocket.
 - `RejectCount` — the same rule for `RejectCountFilter`.
 - `PreventBroadcast` — recipient-visible to its author or its `p`, author-only to its
   author, a kind that is not served never.
-- `ShapeValidator` — the per-kind structural validator registry (`4`, `5`, `62`).
 
 `policies/dm.go` keeps `DMKindAllowlist`, `DMReadPolicy`, `DMCountPolicy` and
 `DMBroadcastGuard` as thin wrappers over the DM `KindRules` for code that wired khatru
@@ -213,7 +212,6 @@ by hand.
   (`max_event_size`), measured on the serialized event.
 - `TagShapeLimits(maxTags, maxNameLen, maxValueLen)` — every tag, every element,
   unlike `PreventLargeTags`, which only looks at single-letter names and `tag[1]`.
-- `ValidateKind4Shape`, `ValidateKind5Shape`, `ValidateKind62Shape`.
 
 `policies/ratelimits.go` gained `FilterAuthedPubKeyRateLimiter`: `startRateLimitSystem`
 is unexported, so a per-npub REQ limit could not be built outside the package.
@@ -257,9 +255,9 @@ server stay explicit in `main.go` — they are structure, not policy.
 - `bkind_test.go` wires the reference config (`policies.DefaultConfig()`, which is the
   embedded document; rate limits off) and drives it over a real
   websocket: the NIP-42 challenge round trip, authorship binding, the whole
-  `RejectEvent` table (kind, content size, expiration, client tag, tag shape,
-  Kind 4 structure), the read matrix (author, recipient, third party,
-  unauthenticated), live delivery to the recipient only, deletion by author vs
+  `RejectEvent` table (kind, content size, expiration, client tag, tag shape), the
+  read matrix (author, recipient, third party, unauthenticated), live delivery to the
+  recipient only, deletion by author vs
   third party (including the re-publish attempt), the vanish request (foreign
   relay tag, erasure, refusing older events, missing `DeleteEvent`), NIP-11, and
   the startup expiration sweep.

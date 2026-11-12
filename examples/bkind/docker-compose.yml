@@ -23,6 +23,10 @@ services:
       BKIND_ADDR: ":3334"
       BKIND_DB: /data
       BKIND_SWEEP_INTERVAL: ${BKIND_SWEEP_INTERVAL:-5m}
+      # text on stderr at info; the container log is where journald would be on a
+      # host. debug adds badger's chatter, json suits a log shipper.
+      BKIND_LOG_LEVEL: ${BKIND_LOG_LEVEL:-info}
+      BKIND_LOG_FORMAT: ${BKIND_LOG_FORMAT:-text}
       # the policy set is the binary's default (a Kind-4 DM relay); set BKIND_CONFIG
       # to a JSON file and mount it to change kinds, limits or rate limits
       #BKIND_CONFIG: /etc/bkind/bkind.json

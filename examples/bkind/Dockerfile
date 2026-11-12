@@ -51,7 +51,9 @@ WORKDIR /data
 # limits here would be a second source of truth that silently drifts.
 ENV BKIND_ADDR=:3334 \
     BKIND_DB=/data \
-    BKIND_SWEEP_INTERVAL=5m
+    BKIND_SWEEP_INTERVAL=5m \
+    BKIND_LOG_LEVEL=info \
+    BKIND_LOG_FORMAT=text
 
 # BKIND_URL has no default on purpose: NIP-42 auth events and NIP-62 vanish
 # requests are both matched against it, so a wrong value breaks writes silently.

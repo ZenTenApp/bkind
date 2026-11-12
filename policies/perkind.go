@@ -374,20 +374,6 @@ func (r *KindRule) tagLimitsCheck() eventCheck {
 	return r.withTemplate("tag_limits", inner, func(_ *nostr.Event) map[string]string { return nil })
 }
 
-// shapeCheck runs the registered structural validator for this kind, such as
-// ValidateKind4Shape. It is not a setting and cannot be switched off: a kind with
-// a validator is always checked, and a kind without one has nothing to check. The
-// validators are Go functions in the registry because a JSON document cannot
-// carry code.
-func (r *KindRule) shapeCheck(kind uint16) eventCheck {
-	validator := ShapeValidator(kind)
-	if validator == nil {
-		return nil
-	}
-	inner := eventCheck(validator)
-	return r.withTemplate("shape", inner, func(_ *nostr.Event) map[string]string { return nil })
-}
-
 // rateLimitChecks are the write limits of this kind, keyed by the author's
 // npub or by the remote IP.
 func (r *KindRule) rateLimitChecks() (out []eventCheck) {
@@ -409,9 +395,9 @@ func (r *KindRule) rateLimitChecks() (out []eventCheck) {
 // checks assembles the write policy of one kind, in the order the rejections
 // should reach a client: who may write, whether they are who they say, whether
 // the event is on time, then what it must carry. The size limits come before
-// the structural rules — an oversized event should hear about its size, not
-// about a tag it never got to write — and the rate limits come last.
-func (r *KindRule) checks(kind uint16) []eventCheck {
+// the tag rules — an oversized event should hear about its size, not about a tag
+// it never got to write — and the rate limits come last.
+func (r *KindRule) checks() []eventCheck {
 	out := []eventCheck{}
 	if check := r.writeAllowCheck(); check != nil {
 		out = append(out, check)
@@ -434,9 +420,6 @@ func (r *KindRule) checks(kind uint16) []eventCheck {
 		out = append(out, check)
 	}
 	if check := r.tagLimitsCheck(); check != nil {
-		out = append(out, check)
-	}
-	if check := r.shapeCheck(kind); check != nil {
 		out = append(out, check)
 	}
 	out = append(out, r.rateLimitChecks()...)

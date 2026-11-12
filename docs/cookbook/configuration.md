@@ -70,8 +70,7 @@ fault each, so every failure message can be tried by hand:
 
 ```sh
 BKIND_CONFIG=examples/bkind/invalid/tag-budget-impossible.json bkind -print-config
-# invalid configuration: rules[4]: tag_limits.max_tags is 2 but
-#   "expiration", "client" and "p" must be present, so no event could be accepted
+# time=2025/04/01 12:00:00 level=ERROR msg="[bkind] invalid configuration" err="rules[4]: tag_limits.max_tags is 2 but \"expiration\", \"client\" and \"p\" must be present, so no event could be accepted"
 ```
 
 `TestInvalidExamplesFail` runs every file there, insists on the reason rather
@@ -92,6 +91,13 @@ Each layer overrides the one before it:
 
 The result is validated before the listener starts; an invalid configuration is
 a startup error, never a relay that accepts events it cannot serve.
+
+Log settings are not part of this document and cannot be: `BKIND_LOG_LEVEL` /
+`-log-level` and `BKIND_LOG_FORMAT` / `-log-format` (see
+[the configuration table](./deploying.md#_4-configuration)) describe the process,
+not the relay, so `-print-config` never prints them and a policy file cannot set
+them. The same is true of `BKIND_ADDR`, `BKIND_DB`, `BKIND_URL` and
+`BKIND_SWEEP_INTERVAL`.
 
 JSON is parsed strictly: an unknown field anywhere — in a rule, in a gate, in a
 rate limit — is an error, so `{"4": {"contnet": ...}}` fails instead of silently
@@ -413,10 +419,10 @@ or process settings:
   `SetExpirationInterval`);
 - `ServiceURL`, the HTTP server and the sweep interval — flags and `BKIND_*`,
   not the policy file (`examples/bkind/main.go`);
-- the structural validators themselves, `policies/kinds.go` — they are code,
-  because a JSON document cannot carry code, and they always run for the kinds
-  that have one. Serving a kind with no registered validator is possible, and
-  means serving it without a structural check;
+- any kind structure rule that is not expressible as a rule setting: a JSON
+  document cannot carry code, so the library ships no per-kind structural
+  validators at all — a kind is exactly what its rule says, and a relay that needs
+  more writes its own `RejectEvent` policy;
 - `require_auth` is on or off per kind; the rule "author equals the authenticated
   key" cannot be replaced by "author is any key" from a file. A relay that
   needs that writes its own `RejectEvent` policy instead.
@@ -427,9 +433,10 @@ or process settings:
 (`TestConfigDocumentReplacesWhatItNames`: a document is the whole kind set, and a
 rule is a whole rule), that
 rules do not inherit (`TestRulesDoNotInherit`: two kinds with unrelated policies,
-both honoured by the relay), the description requirement, that the structural
-validator is not a setting (`TestShapeIsNotASetting`: `shape` is an unknown field
-and the registered validator runs anyway), every duration and size notation, the
+both honoured by the relay), the description requirement, that there is no
+structural validator to switch (`TestShapeIsNotASetting`: `shape` is an unknown
+field, and a reply reference or a self-addressed Kind 4 passes because no shape
+check runs), every duration and size notation, the
 one-spelling rule (old names refused, top-level sections refused), the validation
 errors, allow lists on both sides (including `[]` meaning nobody), the age
 window, tag patterns, error templates, per-kind differences (one kind demands an

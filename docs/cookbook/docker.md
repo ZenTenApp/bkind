@@ -115,7 +115,8 @@ passed `--auth`".
 already gitignored; `chmod 600 .env` if you like.
 
 Everything else has a sane default baked into the binary: the policy set is
-`policies.DefaultConfig` (a Kind-4 DM relay), and `BKIND_SWEEP_INTERVAL` is `5m`. See
+`policies.DefaultConfig` (a Kind-4 DM relay), `BKIND_SWEEP_INTERVAL` is `5m`, and
+the log is text on stderr at `info`. See
 the [configuration table](./deploying.md#_4-configuration) for what each variable means,
 and [Configuring a relay](./configuration.md) for the JSON policy file.
 
@@ -234,6 +235,12 @@ sudo docker compose up -d --build         # upgrade in place, volume is reused
 sudo docker compose restart bkind         # settings reload from .env
 sudo docker compose stop bkind            # drains for up to 15s, then closes the store
 ```
+
+The container log is stderr, so the level and shape are the same two settings as on
+a host: `BKIND_LOG_LEVEL=debug` in `.env` for badger's debug records and one line
+per rejected write, `BKIND_LOG_FORMAT=json` if you ship the log somewhere. `docker compose logs bkind |
+grep -i badger` still works: badger writes through the relay's logger, so its lines
+carry the same prefix and level, and `BKIND_LOG_LEVEL=warn` is what silences it.
 
 **Backups.** Badger holds a `LOCK` inside the volume, so stop the relay first:
 

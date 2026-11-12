@@ -4,6 +4,7 @@ go 1.24.1
 
 require (
 	github.com/bep/debounce v1.2.1
+	github.com/dgraph-io/badger/v4 v4.5.0
 	github.com/fasthttp/websocket v1.5.12
 	github.com/fiatjaf/eventstore v0.16.2
 	github.com/liamg/magic v0.0.1
@@ -30,7 +31,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/dgraph-io/badger/v4 v4.5.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.6.0 // indirect

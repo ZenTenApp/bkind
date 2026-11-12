@@ -2,9 +2,8 @@ package bkind
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +17,7 @@ import (
 
 func NewRelay() *Relay {
 	rl := &Relay{
-		Log: log.New(os.Stderr, "[bkind] ", log.LstdFlags),
+		Logger: DefaultLogger(),
 
 		Info: &nip11.RelayInformationDocument{
 			Software:      "https://github.com/ZenTenApp/bkind",
@@ -84,9 +83,11 @@ type Relay struct {
 	// editing info will affect the NIP-11 responses
 	Info *nip11.RelayInformationDocument
 
-	// Default logger, as set by NewServer, is a stdlib logger prefixed with "[bkind] ",
-	// outputting to stderr.
-	Log *log.Logger
+	// Default logger, as set by NewRelay, is a text slog logger writing to stderr at
+	// level info, with every message prefixed "[bkind] ". Replace it to change the
+	// level, the format or the destination; see NewLogger. A nil value falls back to
+	// slog.Default(), so a hand-built Relay logs rather than panicking.
+	Logger *slog.Logger
 
 	// for establishing websockets
 	upgrader websocket.Upgrader
