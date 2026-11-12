@@ -562,35 +562,31 @@ func TestRulesDoNotInherit(t *testing.T) {
 	}
 }
 
-// The structural validator is not a setting: it runs for every kind that has one,
-// and a document cannot switch it on or off. It belongs to one kind, so a kind
-// without a validator simply has nothing to run.
+// There is no structural validator to switch on or off: `shape` is not a field a
+// document can carry, and the framework ships no per-kind shape checks. What a
+// kind demands comes from its rule and nowhere else.
 func TestShapeIsNotASetting(t *testing.T) {
 	// a document that still names the old switch is refused like any other typo
 	if _, err := policies.DefaultConfig().WithJSON([]byte(`{"4": {"shape": true}}`)); err == nil || !strings.Contains(err.Error(), `unknown field "shape"`) {
 		t.Fatalf("shape must not be accepted as a setting: %v", err)
 	}
 
-	// kind 4's validator runs because kind 4 has one
+	// nothing outside the rule rejects these: a reply reference, and a message
+	// addressed to its own author, both reach the relay's write policy and pass
 	cfg := policies.DefaultConfig()
 	relay, _ := wire(t, cfg)
 	write := writePolicy(relay)
 
-	// a kind-4 event with an "e" tag is refused by ValidateKind4Shape, which no
-	// rule asked for
-	bad := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+	reply := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
 		Tags: nostr.Tags{{"p", bobKey}, nearExpiration(), {"client", "x"}, {"e", strings.Repeat("a", 64)}}}
-	if reject, msg := write(aliceCtx(), bad); !reject || !strings.Contains(msg, "e") {
-		t.Fatalf("the registered validator must always run: %v %q", reject, msg)
+	if reject, msg := write(aliceCtx(), reply); reject {
+		t.Fatalf("a reply reference must not be refused by a shape rule: %q", msg)
 	}
 
-	// a kind with no registered validator is served without one
-	cfg.Rules["1"] = &policies.KindRule{
-		Description:  "public notes, with no structural validator",
-		RuleSettings: policies.RuleSettings{Write: policies.WriteGate{Allow: policies.AllowList{"*"}}, Read: policies.ReadGate{Allow: policies.AllowList{"*"}}},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("a kind with no validator must be servable: %v", err)
+	self := &nostr.Event{Kind: 4, PubKey: aliceKey, Content: "ciphertext",
+		Tags: nostr.Tags{{"p", aliceKey}, nearExpiration(), {"client", "x"}}}
+	if reject, msg := write(aliceCtx(), self); reject {
+		t.Fatalf("no shape rule rejects a self-addressed kind 4: %q", msg)
 	}
 }
 

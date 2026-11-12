@@ -82,7 +82,7 @@ framework plus the DM relay and the policy set.
 - **`Kind N`**, capital K, space before the number: `Kind 4`, `Kind 5`, `Kind 62`.
   Compound adjectives may hyphenate: `a Kind-4-only relay`.
 - Never `kind 4` in prose, never `Kind4` in prose. `Kind4` is acceptable inside a Go
-  identifier (`ValidateKind4Shape`), because that is code, not prose.
+  identifier (`DMKindAllowlist`), because that is code, not prose.
 - `NIP-NN` keeps its hyphen and capitals: `NIP-42`, `NIP-40`, `NIP-62`.
 - Nostr wire vocabulary stays lowercase: `kind` as a field name, `event`, `filter`,
   and tag names `p`, `e`, `a`, `expiration`, `client` — e.g. `"kind": 4`.

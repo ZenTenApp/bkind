@@ -481,26 +481,6 @@ func TestBKindWriteRules(t *testing.T) {
 			reason: `multiple "p" tags`,
 		},
 		{
-			name: "references another event",
-			evt: func() *nostr.Event {
-				evt := valid()
-				evt.Tags = append(evt.Tags, nostr.Tag{"e", strings.Repeat("a", 64)})
-				evt.Sign(alice.sk)
-				return evt
-			},
-			reason: `must not carry "e" tags`,
-		},
-		{
-			name: "addressed to itself",
-			evt: func() *nostr.Event {
-				evt := valid()
-				evt.Tags[0] = nostr.Tag{"p", alice.pk}
-				evt.Sign(alice.sk)
-				return evt
-			},
-			reason: "cannot be addressed to its own author",
-		},
-		{
 			name: "deletion without targets",
 			evt: func() *nostr.Event {
 				evt := &nostr.Event{
@@ -511,7 +491,7 @@ func TestBKindWriteRules(t *testing.T) {
 				evt.Sign(alice.sk)
 				return evt
 			},
-			reason: `at least one event with an "e" tag`,
+			reason: "no valid deletion targets",
 		},
 	}
 
@@ -1001,7 +981,7 @@ func TestBKindConfigFileWiresTheRelay(t *testing.T) {
 	alice.authenticate()
 
 	// a DM to a peer, oversized by one byte: the size limit is what the client
-	// should hear about, not the shape rules that follow it
+	// should hear about, not the tag rules that follow it
 	peer, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
 	if err != nil {
 		t.Fatal(err)

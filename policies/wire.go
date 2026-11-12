@@ -50,7 +50,7 @@ func (c Config) writePolicy() func(context.Context, *nostr.Event) (bool, string)
 	served := c.KindNumbers()
 	byKind := make(map[uint16][]eventCheck, len(served))
 	for _, kind := range served {
-		byKind[kind] = c.Rule(kind).checks(kind)
+		byKind[kind] = c.Rule(kind).checks()
 	}
 
 	return func(ctx context.Context, evt *nostr.Event) (bool, string) {

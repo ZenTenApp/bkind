@@ -285,19 +285,3 @@ func (k KindRules) PreventBroadcast(ws *bkind.WebSocket, evt *nostr.Event) bool 
 
 	return true
 }
-
-// KindShapeValidator is a per-kind structural validator, such as ValidateKind4Shape.
-type KindShapeValidator func(context.Context, *nostr.Event) (bool, string)
-
-// kindShapeValidators is the registry of shape validators the framework ships. A
-// kind rule turns its validator on; the functions themselves cannot live in JSON.
-var kindShapeValidators = map[uint16]KindShapeValidator{
-	4:  ValidateKind4Shape,
-	5:  ValidateKind5Shape,
-	62: ValidateKind62Shape,
-}
-
-// ShapeValidator returns the registered validator for kind, or nil.
-func ShapeValidator(kind uint16) KindShapeValidator {
-	return kindShapeValidators[kind]
-}

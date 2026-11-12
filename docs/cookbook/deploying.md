@@ -421,7 +421,8 @@ event` gets `--sec "$ALICE" --auth "$RELAY"`.
 | ≤ 16 tags, name ≤ 64, value ≤ 256 | add 17 `-t p=…`, or one `-t p=$(printf 'a%.0s' {1..257})` | `invalid: too many tags` / `invalid: tag value is too long` |
 | Exactly one `client` tag | drop it, or pass `-t client=a -t client=b` | `invalid: missing mandatory "client" tag` / `invalid: multiple "client" tags` |
 | Tags are mandatory, not optional | same event with `-t client=` | `invalid: "client" tag must have a non-empty value` |
-| Kind 4 shape | two `-t p=`, or `-t e=<id>`, or `-t p=$APUB` (self) | `invalid: Kind 4 events must have exactly one "p" tag`, `… must not carry "e" tags`, `… cannot be addressed to its own author` |
+| Exactly one `p` tag | pass two: `-t p=$BPUB -t p=$CPUB` | `invalid: multiple "p" tags` |
+| No shape rules | add `-t e=<event-id>` (NIP-04 replies), or address it to `$APUB` (self) | accepted: nothing outside the rule is checked |
 | Auth on write | omit `--auth` | `auth-required: you must be authenticated to publish to this relay (NIP-42)` |
 | Author is the authed key | `nak event --sec "$BOB" …` for an event signed by `ALICE` | `blocked: you can only publish events signed by your authenticated key` |
 | Auth on read | `nak req -k 4 -a $APUB` without `--auth` | `auth-required:` |
