@@ -19,6 +19,8 @@
 #   --kinds LIST           kinds to serve (default 4,5,62; can only narrow)
 #   --name NAME            NIP-11 name
 #   --description TEXT     NIP-11 description (empty = derived)
+#   --log-level LEVEL      debug, info, warn or error (default: info)
+#   --log-format FORMAT    text for journald, json for a log shipper (default: text)
 #   --proxy nginx|caddy|none   TLS terminator (default: nginx)
 #   --email ADDRESS        Let's Encrypt registration email
 #
@@ -64,6 +66,8 @@ OPT_DB=""
 OPT_KINDS=""
 OPT_NAME=""
 OPT_DESC=""
+OPT_LOG_LEVEL=""
+OPT_LOG_FORMAT=""
 OPT_PROXY=""
 OPT_EMAIL=""
 
@@ -508,6 +512,11 @@ BKIND_URL=${BKIND_URL}
 BKIND_ADDR=${BKIND_ADDR}
 BKIND_DB=${BKIND_DB}
 BKIND_SWEEP_INTERVAL=${BKIND_SWEEP_INTERVAL}
+# how much is logged and in what shape. stderr is the only sink, so journald owns
+# the file, its rotation and its retention. warn silences badger's INFO lines,
+# debug adds its debug records; json suits a log shipper.
+BKIND_LOG_LEVEL=${BKIND_LOG_LEVEL}
+BKIND_LOG_FORMAT=${BKIND_LOG_FORMAT}
 BKIND_KINDS=${BKIND_KINDS}
 # quoted: these two are free text and may contain spaces or '#'
 BKIND_NAME="${BKIND_NAME}"
@@ -536,7 +545,7 @@ step_env() {
 	info "Press Enter to keep a value.$existing_note"
 
 	# precedence for each default: explicit flag > existing env file > built-in
-	local def_url def_addr def_db def_sweep def_kinds def_name
+	local def_url def_addr def_db def_sweep def_kinds def_name def_log_level def_log_format
 	if [[ -n $OPT_URL ]]; then
 		def_url=$OPT_URL
 	elif [[ -n $OPT_DOMAIN ]]; then
@@ -549,6 +558,8 @@ step_env() {
 	def_sweep=${ENV_CURRENT[BKIND_SWEEP_INTERVAL]:-5m}
 	def_kinds=${OPT_KINDS:-${ENV_CURRENT[BKIND_KINDS]:-4,5,62}}
 	def_name=${OPT_NAME:-${ENV_CURRENT[BKIND_NAME]:-B Kind}}
+	def_log_level=${OPT_LOG_LEVEL:-${ENV_CURRENT[BKIND_LOG_LEVEL]:-info}}
+	def_log_format=${OPT_LOG_FORMAT:-${ENV_CURRENT[BKIND_LOG_FORMAT]:-text}}
 
 	BKIND_URL=$(ask "Public relay URL (ws:// or wss://)" "$def_url")
 	[[ $BKIND_URL =~ ^wss?://[^/[:space:]]+ ]] || die "BKIND_URL must start with ws:// or wss:// and have a host"
@@ -560,7 +571,21 @@ step_env() {
 	BKIND_KINDS=$(ask "Kinds served (comma-separated)" "$def_kinds")
 	BKIND_NAME=$(ask "Relay name (NIP-11)" "$def_name")
 	BKIND_DESCRIPTION=$(ask "Relay description (empty = derived from kinds)" "${OPT_DESC:-${ENV_CURRENT[BKIND_DESCRIPTION]:-}}")
+	BKIND_LOG_LEVEL=$(ask "Log level (debug, info, warn, error)" "$def_log_level")
+	BKIND_LOG_FORMAT=$(ask "Log format (text for journald, json for a shipper)" "$def_log_format")
 	BKIND_CONFIG=${ENV_CURRENT[BKIND_CONFIG]:-}
+
+	# -print-config does not read log settings (they describe the process, not the
+	# relay), so step_policy cannot catch a bad value: validate them here or the
+	# unit fails at start with only a journal line naming the value.
+	case "$BKIND_LOG_LEVEL" in
+	debug | info | warn | error) ;;
+	*) die "BKIND_LOG_LEVEL must be debug, info, warn or error (got: $BKIND_LOG_LEVEL)" ;;
+	esac
+	case "$BKIND_LOG_FORMAT" in
+	text | json) ;;
+	*) die "BKIND_LOG_FORMAT must be text or json (got: $BKIND_LOG_FORMAT)" ;;
+	esac
 
 	# BKIND_KINDS can only narrow the document, never add a kind to it
 	local doc_kinds="4,5,62"
@@ -1131,6 +1156,8 @@ main() {
 		--kinds) OPT_KINDS="${2-}"; shift ;;
 		--name) OPT_NAME="${2-}"; shift ;;
 		--description) OPT_DESC="${2-}"; shift ;;
+		--log-level) OPT_LOG_LEVEL="${2-}"; shift ;;
+		--log-format) OPT_LOG_FORMAT="${2-}"; shift ;;
 		--proxy) OPT_PROXY="${2-}"; shift ;;
 		--email) OPT_EMAIL="${2-}"; shift ;;
 		-h | --help) usage ;;
