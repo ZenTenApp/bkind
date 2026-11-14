@@ -928,7 +928,7 @@ step_proxy() {
 		desired=$(
 			cat <<EOF
 $DOMAIN {
-	reverse_proxy 127.0.0.1:3334 {
+	reverse_proxy $(upstream_addr) {
 		# overwrite rather than append: a client-supplied X-Forwarded-For must not
 		# reach the relay, otherwise per-ip rate limits are trivially spoofed
 		header_up X-Forwarded-For {remote_host}
@@ -1000,7 +1000,7 @@ CADDYEOF"
 		fi
 		;;
 	*)
-		warn "skipping; make sure $DOMAIN proxies to 127.0.0.1:3334 with websocket upgrade"
+		warn "skipping; make sure $DOMAIN proxies to $(upstream_addr) with websocket upgrade"
 		;;
 	esac
 }
